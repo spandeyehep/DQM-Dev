@@ -1,0 +1,76 @@
+#!/bin/sh
+
+##H Usage: dmwmbld_task ACTION
+##H
+##H Available actions:
+##H   help                show this help
+##H   version             get current version of the service
+##H   build               process build requests
+##H   updateweb           sync produced files to the public web area
+##H   logclean [minutes]  archive logs older than 24h and deletes those older than [minutes] (def. 2 weeks)
+##H
+##H For more details please refer to operations page:
+##H   https://twiki.cern.ch/twiki/bin/view/CMS/DMWMBuilderAgent
+
+ME=$(basename $(dirname $0))
+TOP=$(cd $(dirname $0)/../../.. && pwd)
+CFGDIR=$(dirname $0)
+STATEDIR=$TOP/state/$ME
+LOGDIR=$TOP/logs/$ME
+LOGFILE="dmwmbld-$(date +%Y%m%d)"
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/kerberos/bin
+
+LOGURL={LOGURL}
+WEBDIR={WEBDIR}
+ARCHS="{ARCHS}"
+ALLARCHS={ALLARCHS}
+DMWMBLD_VER={VER}
+
+# Main routine, perform action requested on command line.
+case ${1:-help} in
+  build )
+    if [ $(pgrep -u $(id -u) -f "${CFGDIR}/gh-bot" | wc -l) = 0 ]; then
+      cd $STATEDIR
+      export PYTHONUNBUFFERED="true"
+      for arch in $ARCHS; do
+        echo "------------- $(date '+%Y-%m-%d %H:%M:%S') $arch -------------" >> $LOGDIR/$LOGFILE
+        TERM=dumb $CFGDIR/gh-bot -B ${arch%%:*} -a ${arch##*:} -T $ALLARCHS -U $LOGURL &>> $LOGDIR/$LOGFILE
+        echo >> $LOGDIR/$LOGFILE
+      done
+    else
+      exit 1
+    fi
+    ;;
+
+  updateweb )
+    klist -s || { echo "$0: you must have a valid afs kerberos token."; exit 1; }
+    # set it to dry-run since it needs testing
+    rsync -q -rvu ${2:-$STATEDIR/webarea/} $WEBDIR/
+    ;;
+
+  logclean )
+    # archive logs that have not been touched in last 24h
+    FILES=$(find $LOGDIR -maxdepth 1 -type f -name '*-*-*_*-*-*' -mtime +0 | sort)
+    [ X"$FILES" = X ] || zip -9Tmojq $LOGDIR/old-logs$(date +%Y%m%d-%H%M).zip $FILES
+
+    # and deletes them
+    [ X"$FILES" = X ] || rm -f $FILES
+
+    # also delete old archives
+    MIN=$(($2)); [ $MIN -lt 1 ] && MIN=20160 # defaults to 2 weeks
+    find $LOGDIR -maxdepth 1 -name '*.zip' -cmin +$MIN -exec rm {} \;
+    ;;
+
+  help )
+    perl -ne '/^##H/ && do { s/^##H ?//; print }' < $0
+    ;;
+
+  version )
+    echo "${DMWMBLD_VER:-unknown}"
+    ;;
+
+  * )
+    echo "$0: unknown action '$1', please try '$0 help' or documentation." 1>&2
+    exit 1
+    ;;
+esac

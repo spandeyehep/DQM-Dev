@@ -1,0 +1,595 @@
+#!/bin/sh
+
+### Usage: InstallProd -h
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -s image -v VER -p PKGS -u PXUSER [-r A=B] [-a AUTH]
+### Usage: InstallProd  -A arch               [-d DIR] -x PROD -s deployagent -p PKGS -r A=B
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -s kstart
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s state:maintenance -u USER
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s dnswait:ALIAS
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s shutdown
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s checkprocs
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s backup:save
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s sysprep:{image|backend|frontend}
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s sync -v VER
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s syncdelete
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s backup:restore
+### Usage: InstallProd [-A arch]              [-d DIR] -x PROD -t HOSTS -s deployimage -p PKGS -r A=B -v VER
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s deployauth -v VER -a AUTH 
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s deployproxy -u USER
+### Usage: InstallProd [-A arch]              [-d DIR] -x PROD -t HOSTS -s deploypost  -p PKGS -r A=B -v VER
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s post -v VER -p PKGS
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s migrate -p PKGS
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s reboot
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s status[:what]
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s start[:what]
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s stop[:what]
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s check -v VER
+### Usage: InstallProd                        [-d DIR] -x PROD -t HOSTS -s deploycheck -v VER
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s state:check -u USER
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -t HOSTS -s state:production -u USER
+### Usage: InstallProd [-A arch] [-R RELEASE] [-d DIR] -x PROD -s kstop
+
+usage()
+{
+  perl -ne '/^### Usage:/ && do { s/^### ?//; print }' < $0
+  exit 1
+}
+
+help()
+{
+  perl -ne '/^###/ && do { s/^### ?//; print }' < $0
+  exit 0
+}
+
+confirm()
+{
+  key=$(perl -e 'print map{chr(1+32*(2+int(rand(2)))+int(rand(26)))} 0..9')
+  echo; echo "********************************************"
+  echo -n "*** $1? if yes, say [$key]: "
+  read answer
+  case $answer in
+    $key ) true ;;
+    * ) exit 2 ;;
+  esac
+}
+
+CMD="$0 $@"
+STAGE= VER= REPO= ACFG= PKGS= HOSTS= PXUSER= STEM= ARCH= RELEASE=
+eval set -- $(getopt -n $0 -o A:R:hs:d:v:r:a:p:t:u:x: -- ${1+"$@"})
+[ $? = 0 ] || usage
+for arg; do
+  case $arg in
+    -d) cd "$2" || exit $?; shift; shift ;;
+    -A) ARCH="-A $2"; shift; shift ;;
+    -R) RELEASE="-R $2"; shift; shift ;;
+    -t) HOSTS="$2"; shift; shift ;;
+    -s) STAGE="$2"; shift; shift ;;
+    -v) VER="$2"; shift; shift ;;
+    -u) PXUSER="$2"; shift; shift ;;
+    -x) STEM="$2"; shift; shift ;;
+    -r) REPO="-r $2"; shift; shift ;;
+    -a) ACFG="-p $2"; AUTH="$2"; rm -f $2/auth/wmcore/header-auth-key*; shift; shift ;;
+    -p) PKGS="$2"; shift; shift ;;
+    -h) help ;;
+    --) shift; break ;;
+    -*) usage ;;
+  esac
+done
+
+[ $# = 0 ] || usage
+[ -d cfg/admin ] || usage
+[ X"$STAGE" = X ] && usage
+[ X"$STEM" = X ] && usage
+
+case $STAGE in
+  dnswait:* | sysprep:* | state:* | backup:* | status:* | start:* | stop:* | post:* )
+    WHAT=${STAGE#*:} STAGE=${STAGE%:*} ;;
+  post )
+    WHAT=$(hostname -s) ;;
+  sync | check )
+    case $VER in
+      fe* ) EXTRA="-f -s_/srv-*/[sl]*/[b-eg-z]* -f -s_/srv-*/[sl]*/fi*" ;;
+      be* ) EXTRA="-f -s_/srv-*/[sl]*/frontend" ;;
+      HG* ) EXTRA="" ;;
+    esac ;;
+  status | start | stop )
+    WHAT="*" ;;
+esac
+
+case $STAGE in
+  image )
+    [ X"$PKGS" = X ] && usage
+    [ X"$VER" = X ] && usage
+    case $PXUSER:$VER in :be* | :HG* ) usage ;; esac
+    ;;
+  deployagent )
+    [ X"$PKGS" = X ] && usage
+    [ X"$ARCH" = X ] && usage
+    [ X"$REPO" = X ] && usage
+    ;;
+
+  sysprep | dnswait )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$WHAT" = X ] && usage
+    ;;
+  backup )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$WHAT" = X ] && usage
+    case $WHAT in save | restore ) ;; * ) usage ;; esac
+    ;;
+  state )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$PXUSER" = X ] && usage
+    case $WHAT in
+      check | production | maintenance ) ;;
+      * ) usage ;;
+    esac
+    ;;
+  sync | check | deploycheck )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$VER" = X ] && usage
+    ;;
+  deployauth )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$VER" = X ] && usage
+    [ X"$AUTH" = X ] && usage
+    ;;
+  deployproxy )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$PXUSER" = X ] && usage
+    ;;
+  post | deploypost | deployimage )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$PKGS" = X ] && usage
+    [ X"$VER" = X ] && usage
+    [ X"$REPO" = X ] && usage
+    ;;
+  status | start | stop | shutdown | checkprocs | reboot | syncdelete )
+    [ X"$HOSTS" = X ] && usage
+    ;;
+  migrate )
+    [ X"$HOSTS" = X ] && usage
+    [ X"$PKGS" = X ] && usage
+    ;;
+esac
+
+
+# Create directory for deployment logs.
+[ -d $PWD/.deploy ] || {
+  mkdir -p $PWD/.deploy || exit $?
+  chmod go-rwx $PWD/.deploy || exit $?
+}
+
+# Save all the output on errlog
+errlog=$PWD/.deploy/$STEM-$(date '+%Y%m%d').log
+echo "INFO: this installation log can be found in $errlog"
+(
+echo "$(date '+%Y%m%d-%H%M%S'): $CMD"
+case $STAGE in
+  image )
+    set -ex
+    rm -f srv
+    ln -s srv-$STEM srv
+    mkdir -p srv-$STEM
+    $PWD/cfg/Deploy $ARCH $RELEASE $ACFG $REPO -t $VER -a -s prep $PWD/srv $PKGS
+    case $VER in HG* | be* )
+      ssh -o PubkeyAuthentication=no -t $PXUSER@$(hostname) $PWD/cfg/admin/ProxySeed \
+        -t prod -d cmsweb@$(hostname -f):$PWD/srv/$VER/auth/proxy ;;
+    esac
+    sudo -H -u _sw bashs -lc "$PWD/cfg/Deploy $ARCH $RELEASE $ACFG $REPO -t $VER -a -s sw $PWD/srv $PKGS"
+    ;;
+
+  # deployagent: non-interactivelly detects and installs the latest release files,
+  #              but do not switch to it yet. To run on the nodes as a cronjob
+  deployagent )
+    set -x
+    VER=$(curl -ks "http://cmsrep.cern.ch/cmssw/${REPO##*=}/RPMS/${ARCH##* }/?C=M;O=D" |egrep -o 'cms\+comp\+HG[0-9]+[a-z](-comp[0-9]*)?'| head -n1|cut -d+ -f3)
+    [ X"$VER" = X ] && 
+      { echo "Could not determine the release to install." 1>&2; exit 1; }
+    [ -d $PWD/srv/$VER/sw$(echo ${REPO##*=comp}) ] && exit 0  # release is already installed
+    set -e
+    (rm -rf cfg; git clone -q git://github.com/dmwm/deployment.git cfg; cd cfg; git reset --hard ${VER%%-*})
+    $PWD/cfg/Deploy $ARCH -R comp@$VER $REPO -t $VER -pl $PWD/srv/auth -a -s prep $PWD/srv $PKGS
+    sudo -H -u _sw bashs -lc "$PWD/cfg/Deploy $ARCH -R comp@$VER $REPO -t $VER -pl $PWD/srv/auth -a -s sw $PWD/srv $PKGS"
+    ;;
+
+  # deployimage: from the image server, installs an specific release and cfg
+  #              in parallel into all provided hosts.
+  deployimage )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running deployimage for $HOSTS. This can take a few minutes..."
+    set -ex
+    for host in $HOSTS; do
+      (rsync -zavmHq --delete -f '-s .git' $PWD/cfg/ cmsweb@$host:$PWD/cfg/
+       (echo "exec 2>&1; set -ex; hostname -f; cd $PWD"
+        echo "if [ ! -e $PWD/srv ]; then"
+        echo "  ln -s srv-$STEM srv"
+        echo "  mkdir -p srv-$STEM"
+        echo "else"
+        echo "  if [ X'\$(readlink $PWD/srv)' = X'srv-$STEM' ]; then :; else"
+        echo "     echo 'WARNING: $PWD/srv does not match srv-$STEM.'"
+        echo "  fi"
+        echo "fi"
+        echo "$PWD/cfg/Deploy $ARCH -R comp@${VER#[bf]e} $REPO -t $VER -pl $PWD/srv/auth -a -s prep $PWD/srv $PKGS"
+        echo "sudo -H -u _sw bashs -lc \"$PWD/cfg/Deploy $ARCH -R comp@${VER#[bf]e} $REPO -t $VER -pl $PWD/srv/auth -a -s sw $PWD/srv $PKGS\""
+        echo "exit 0"
+       ) | ssh cmsweb@$host bashs -l
+      ) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    confirm "deployimage passed for $HOSTS"
+    ;;
+
+  # deployauth: from the image server, it syncs the secrets from AFS to
+  #             all the provided machines, setting proper permissions
+  deployauth )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running deployauth for $HOSTS. This can take a few minutes..."
+    set -ex
+    klist -s
+    filter='-f -rs_/proxy'
+    case $VER in
+      be* ) filter+=' -f -rs_/frontend';;
+      fe* ) filter+=' -f +s_/frontend -f +s_/wmcore-auth -f -s_/*' ;;
+    esac
+    for host in $HOSTS; do
+      (rsync -cavu $filter --rsync-path="sudo rsync" \
+             --delete --delete-excluded              \
+             $AUTH/ cmsweb@$host:$PWD/srv/auth/
+       (echo "exec 2>&1; set -ex; hostname -f; cd $PWD; klist -s"
+        echo "chown cmsweb:_config /data/srv/auth/"
+        echo "chmod 750 /data/srv/auth"
+        echo "for d in /data/srv/auth/*; do"
+        echo '  svc=$(basename $d)'
+        echo '  [ "$svc" != proxy ] || continue'
+        echo '  case $svc in'
+        echo '     wmcore-auth ) chown -R cmsweb:_config $d;;'
+        echo '     * ) chown -R cmsweb:_$svc $d;;'
+        echo '  esac'
+        echo '  chmod 750 $d'
+        echo '  chmod -R 440 $d/*'
+        echo 'done'
+        echo 'exit 0'
+       ) | ssh cmsweb@$host bashs -l
+      ) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    confirm "deployauth passed for $HOSTS"
+    ;;
+
+  # deployproxy: re-seeds the proxy and synchronizes it to all
+  #              the provided machines
+  deployproxy )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    seeddir=$(mktemp -d /tmp/seed-$PXUSER.XXXXXX)
+    trap "rm $errlog* $seeddir/*; rmdir $seeddir" EXIT
+    set -ex
+    ssh -o PubkeyAuthentication=no -t $PXUSER@$(hostname) $PWD/cfg/admin/ProxySeed \
+        -t prod -d cmsweb@$(hostname -f):$seeddir
+    echo "Running deployproxy for $HOSTS. This can take a few minutes..."
+    for host in $HOSTS; do
+      (scp -p $seeddir/seed-$PXUSER.cert cmsweb@$host:$PWD/srv/auth/proxy/
+      ) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    confirm "deployproxy passed for $HOSTS"
+    ;;  
+
+  # deploypost: from the image server, it runs post on all the machines
+  #             effectively switching the release and setting cronjobs
+  deploypost )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running deploypost for $HOSTS. This can take a few minutes..."
+    set -ex
+    for host in $HOSTS; do
+       (echo "exec 2>&1; set -ex; hostname -f; cd $PWD; klist -s"
+        echo "$PWD/cfg/Deploy $ARCH -R comp@${VER#[bf]e} $REPO -t $VER -pl $PWD/srv/auth -a -s post $PWD/srv $PKGS"
+        echo "exit 0"
+       ) | ssh cmsweb@$host bashs -l &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    confirm "deploypost passed for $HOSTS"
+    ;;
+
+  kstart | kstop )
+    set -ex
+    sudo $PWD/cfg/admin/ImageKey ${STAGE#k}
+    ;;
+
+  dnswait )
+    aliased=true
+    while $aliased; do
+      aliased=false
+      alias=" $(dig +short $WHAT.cern.ch | tr '\n' ' ') "
+      for host in $HOSTS; do
+	case $alias in *" $(dig +short $host.cern.ch) "* ) aliased=true ;; esac
+      done
+      echo "*** $WHAT \\ $HOSTS @ $(date '+%Y-%m-%d %H:%M:%S')"
+      for ip in $(dig +short $WHAT.cern.ch); do
+        echo host=$(dig +short -x $ip) ip=$ip
+      done
+      sleep 10; echo
+    done
+
+    echo "*** CHECK SERVER LOGS FOR END OF ACCESS ***"
+    ;;
+
+  backup )
+    set -ex
+    case $WHAT in
+      save )
+        for host in $HOSTS; do
+	  LOGDIR=/afs/cern.ch/cms/cmsweb/log-archive/$host
+          LOGSAVE="/data/srv/current/config/admin/LogSave /data/srv $LOGDIR"
+	  LOGARCH="/data/srv/current/config/admin/LogArchive /data/srv"
+
+	  acrontab -l | egrep " $host .*/LogSave "
+          set +x; confirm "remove acron task to archive logs for $host"; set -x
+	  acrontab -l | egrep -v " $host .*/LogSave " | acrontab
+
+          ssh cmsweb@$host -- $LOGARCH
+          ssh cmsweb@$host -- $LOGSAVE
+	  rsync -av --delete $LOGDIR/ $LOGDIR.backup/
+
+	  ssh cmsweb@$host -- rsync -n -av --no-group --delete \
+	    /data/srv/logs/frontend/ $LOGDIR.backup/
+          set +x; confirm "backup ok for $host"; set -x
+	  ssh cmsweb@$host -- rsync -av --no-group --delete \
+	    /data/srv/logs/frontend/ $LOGDIR.backup/
+	done
+	;;
+
+      restore )
+        for host in $HOSTS; do
+	  LOGDIR=/afs/cern.ch/cms/cmsweb/log-archive/$host
+	  [ $(acrontab -l | egrep -c " $host .*/LogSave ") = 0 ]
+	  [ -d $LOGDIR.backup ]
+
+	  ssh cmsweb@$host -- rsync -n -av --no-group --delete \
+	    $LOGDIR.backup/ /data/srv/logs/frontend/
+          set +x; confirm "restore ok for $host"; set -x
+	  ssh cmsweb@$host -- rsync -av --no-group --delete \
+	    $LOGDIR.backup/ /data/srv/logs/frontend/
+
+          set +x; confirm "ok to remove $LOGDIR.backup"; set -x
+	  rm -fr $LOGDIR.backup
+	done
+        ;;
+    esac
+    ;;
+
+  state )
+    set -e
+    case $WHAT in
+      check )
+        for host in $HOSTS; do
+          echo 'sudo /usr/sbin/lemon-host-check -t 15' | ssh cmsweb@$host bashs -l || true
+	done
+        echo "Checking alarm status in roger:"
+        ssh -o PubkeyAuthentication=no $PXUSER@aiadm.cern.ch \
+          roger show $HOSTS | egrep 'hostname|app_alarmed|appstate'|tr -d ','
+	;;
+
+      maintenance )
+        set -x
+        (echo "roger show $HOSTS | egrep 'hostname|app_alarmed|appstate'|tr -d ','"
+         echo "roger update --all_alarms false $HOSTS"
+         echo "roger update --appstate disabled $HOSTS"
+        ) | ssh -o PubkeyAuthentication=no $PXUSER@aiadm.cern.ch sh -l
+        ;;
+
+      production )
+        for host in $HOSTS; do
+          ssh cmsweb@$host sudo /usr/sbin/lemon-host-check -t 15 || true
+        done
+        confirm "ok to put $HOSTS into $WHAT"
+ 
+        set -x
+        (echo "roger update --appstate production $HOSTS"
+         echo "roger update --all_alarms true $HOSTS"
+         echo "roger show $HOSTS | egrep 'hostname|app_alarmed|appstate'|tr -d ','"
+        ) | ssh -o PubkeyAuthentication=no $PXUSER@aiadm.cern.ch sh -l
+        ;;
+    esac
+    ;;
+
+  sysprep )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running sysprep for $HOSTS. This can take a few minutes..."
+    set -e
+    for host in $HOSTS; do
+      (rsync -zavmHq --delete -f '-s .svn' -f '-s .git' $PWD/cfg/ cmsweb@$host:/tmp/foo/
+       (echo "exec 2>&1; set -ex; hostname -f; cd $PWD"
+        echo "cd /tmp/foo"
+        echo "./Deploy $ARCH -t dummy -s post \$PWD system/$WHAT"
+        echo "exit 0") |
+        ssh cmsweb@$host bashs -l
+      ) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    confirm "sysprep passed for $HOSTS"
+    for host in $HOSTS; do
+      (echo "exec 2>&1; set -ex; hostname -f; rm -fr /tmp/foo") |
+       ssh cmsweb@$host bashs -l
+    done
+    ;;
+
+
+  syncdelete )
+    confirm "WARNING: have you double-checked $PWD/cfg/admin/rsync-delete-releases.rules file is up-to-date"
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running sync for $HOSTS. This can take a few minutes..."
+    set -ex
+    for host in $HOSTS; do
+      (rsync -av --rsync-path="sudo rsync" --delete \
+             -f ". $PWD/cfg/admin/rsync-delete-releases.rules" \
+             /data/empty/ cmsweb@$host:/data/
+      ) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    ;;
+
+  sync )
+    errlog=$(mktemp /tmp/$(basename $0).XXXXXX)
+    trap "rm $errlog*" EXIT
+    echo "Running sync for $HOSTS. This can take a few minutes..."
+    set -ex
+    (cd srv && rm -f current && ln -s $VER current)
+    for host in $HOSTS; do
+      (sudo rsync -zavmHq -e "$PWD/cfg/admin/ImageKey run ssh -c arcfour" \
+        --rsync-path="sudo rsync" --delete \
+        -f "+ /srv-$STEM/$VER" $EXTRA -f ". $PWD/cfg/admin/rsync-$STEM.rules" \
+        $PWD/ cmsweb@$host:$PWD/) &> $errlog.$host &
+    done
+    wait
+    cat $errlog.*
+    set +x
+    confirm "sync passed for $HOSTS"
+    ;;
+
+  shutdown )
+    set -e
+    for host in $HOSTS; do
+      (echo "exec 2>&1; set -x; hostname -f; cd $PWD"
+       echo "crontab -r"
+       echo "for x in /data/projects/*/config/manage; do"
+       echo "  [ -f \$x ] || continue"
+       echo "  u=_\$(echo \$x | cut -d/ -f4 | cut -d- -f1)"
+       echo "  sudo -H -u \$u bashs -lc \"set -x; \$x stop 'I did read documentation'\""
+       echo "done"
+       echo "for x in srv/enabled/*; do"
+       echo "  [ -f \$x ] || continue"
+       echo "  app=\${x#*/*/}; case \$app in frontend) u=root ;; * ) u=_\$app ;; esac"
+       echo "  sudo -H -u \$u bashs -lc \"set -x; $PWD/srv/current/config/\$app/manage stop 'I did read documentation'\""
+       echo "done"
+       echo "if [ -f /etc/init.d/httpd ]; then"
+       echo "  sudo /sbin/service httpd stop"
+       echo "fi"
+       echo "killall -u cmsweb python"
+       echo "exit 0") |
+       ssh cmsweb@$host bashs -l
+    done
+    ;;
+
+  checkprocs )
+    set -e
+    for host in $HOSTS; do
+      (echo "ps f -A -o user:10,pid,args --sort=uid,-ppid,pid | \\"
+       echo "  grep -e '^_' -e '^cmsweb' | awk '{print \"$host:\", \$0}'"
+       echo "exit 0") |
+       ssh cmsweb@$host bashs -l
+    done
+    ;;
+
+  post )
+    set -e
+    for host in $HOSTS; do
+      (echo "exec 2>&1; set -ex; hostname -f; cd $PWD; klist -s"
+       echo "\$PWD/cfg/Deploy $ARCH $RELEASE $REPO -t $VER -a -s post $PWD/srv $PKGS") |
+       ssh cmsweb@$host bashs -l
+    done
+
+    confirm "post passed for $HOSTS"
+    for host in $HOSTS; do
+      (echo "exec 2>&1; set -ex; hostname -f; rm -fr $PWD/cfg") |
+       ssh cmsweb@$host bashs -l
+    done
+    ;;
+
+  migrate )
+    HA=${HOSTS%\ *} HB=${HOSTS#*\ }
+    for p in $PKGS; do
+      case $p in
+        couchdb )
+          set -ex
+          ssh -t cmsweb@$HB sudo rsync -nzavH -e "'ssh -c arcfour'" \
+            --rsync-path="'sudo rsync'" --delete \
+            cmsweb@$HA:$PWD/srv/state/couchdb/database/ \
+            $PWD/srv/state/couchdb/database/
+
+          set +x; confirm "is $p migration from $HA to $HB ok"; set -x
+
+          ssh -t cmsweb@$HB sudo rsync -zavH -e "'ssh -c arcfour'" \
+            --rsync-path="'sudo rsync'" --delete \
+            cmsweb@$HA:$PWD/srv/state/couchdb/database/ \
+            $PWD/srv/state/couchdb/database/
+          ;;
+
+        * )
+          echo "don't know how migrate $p from $HA to $HB" 1>&2
+          exit 1 ;;
+      esac
+    done
+    ;;
+
+  reboot )
+    set -e
+    for host in $HOSTS; do
+      (set -x; ssh cmsweb@$host sudo /sbin/reboot)
+      [ $? = 0 ]
+    done
+    ;;
+
+  start | status | stop )
+    set -e
+    for host in $HOSTS; do
+      (echo "exec 2>&1; : set -e; hostname -f; cd $PWD; unlog; kdestroy"
+       echo "for f in srv/enabled/$WHAT; do"
+       echo "  app=\${f#*/*/}; case \$app in frontend) u=root ;; * ) u=_\$app ;; esac"
+       echo "  sudo -H -u \$u bashs -lc \"set -x; $PWD/srv/current/config/\$app/manage $STAGE 'I did read documentation'\" || true"
+       echo "done") |
+       ssh cmsweb@$host bashs -l
+    done
+    ;;
+
+  # deploycheck: rsync compare files on image server and on target machines
+  #              based on file checksum
+  deploycheck )
+    set -ex
+    for host in $HOSTS; do
+      sudo rsync -nzcavOmH -e "$PWD/cfg/admin/ImageKey run ssh -c arcfour" \
+        --rsync-path="sudo rsync" --delete \
+        -f "+ /srv-$STEM/$VER" $EXTRA -f "-rs /cfg*" -f "-rs /srv-$STEM/auth" \
+        -f "-rs /srv-$STEM/$VER/auth" -f "-rs /srv-$STEM/$VER/apps" \
+        -f "-s /srv-$STEM/$VER/auth/proxy/seed*.cert" -f "-rs /.deploy" \
+        -f ". $PWD/cfg/admin/rsync-$STEM.rules" \
+        $PWD/ cmsweb@$host:$PWD/
+    done
+    ;;
+
+  check )
+    set -ex
+    for host in $HOSTS; do
+      sudo rsync -nzcavmH -e "$PWD/cfg/admin/ImageKey run ssh -c arcfour" \
+        --rsync-path="sudo rsync" --delete \
+        -f "+ /srv-$STEM/$VER" $EXTRA -f "-s /cfg" \
+        -f "-s /srv-$STEM/$VER/auth/proxy/seed*.cert" \
+        -f ". $PWD/cfg/admin/rsync-$STEM.rules" \
+        $PWD/ cmsweb@$host:$PWD/
+    done
+    ;;
+
+  * )
+    echo "$STAGE: bad stage, try -h for help" 1>&2
+    exit 1
+    ;;
+esac
+) 2>&1 | tee -a $errlog  # save all the output for forensics if needed
+
+exit 0

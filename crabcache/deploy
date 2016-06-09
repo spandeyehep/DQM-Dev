@@ -1,0 +1,27 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_crabcache_deps()
+{
+  deploy $stage backend
+  deploy $stage wmcore-auth
+}
+
+deploy_crabcache_prep()
+{
+  mkproj files
+}
+
+deploy_crabcache_sw()
+{
+  deploy_pkg comp cms+crabcache
+}
+
+deploy_crabcache_post()
+{
+  case $host in vocms013[689] | vocms016[135] ) disable ;; * ) enable ;; esac
+
+  local cmd="$project_config/manage clean 3"
+  $nogroups || cmd="sudo -H -u _crabcache bashs -l -c '$cmd'"
+  (mkcrontab; sysboot
+   [ ! -f $root/enabled/$project ] || echo "0 0 * * * $cmd"
+  ) | crontab -
+}

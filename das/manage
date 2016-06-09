@@ -1,0 +1,218 @@
+#!/bin/sh
+
+##H Usage: manage ACTION [SECURITY-STRING]
+##H
+##H Available actions:
+##H   help        show this help
+##H   version     get current version of the service
+##H   status      show current service's status
+##H   sysboot     start server from crond if not running
+##H   restart     (re)start the service
+##H   start       (re)start the service
+##H   stop        stop the service
+##H   fetchmaps   fetch DAS maps
+##H
+##H For more details please refer to operations page:
+##H   https://twiki.cern.ch/twiki/bin/view/CMS/DASOperation
+
+if [ $(id -un)  = cmsweb ]; then
+  echo "ERROR: please use another account" 1>&2
+  exit 1
+fi
+
+echo_e=-e
+case $(uname) in Darwin )
+  md5sum() { md5 -r ${1+"$@"}; }
+  echo_e=
+  ;;
+esac
+
+ME=$(basename $(dirname $0))
+TOP=$(cd $(dirname $0)/../../.. && pwd)
+ROOT=$(cd $(dirname $0)/../.. && pwd)
+LOGDIR=$TOP/logs/$ME
+STATEDIR=$TOP/state/$ME
+COLOR_OK="\\033[0;32m"
+COLOR_WARN="\\033[0;31m"
+COLOR_NORMAL="\\033[0;39m"
+
+. $ROOT/apps/$ME/etc/profile.d/init.sh
+
+export DAS_ROOT YUI_ROOT
+export PYTHONUNBUFFERED=1
+PYTHONV=`echo $PYTHON_VERSION | cut -f1,2 -d.`
+export DAS_PYTHONPATH=$DAS_ROOT/lib/python$PYTHONV/site-packages
+export DAS_JSPATH=$DAS_ROOT/lib/python$PYTHONV/site-packages/src/js
+export DAS_CSSPATH=$DAS_ROOT/lib/python$PYTHONV/site-packages/src/css
+export DAS_TMPLPATH=$DAS_ROOT/lib/python$PYTHONV/site-packages/src/templates
+export DAS_IMAGESPATH=$DAS_ROOT/lib/python$PYTHONV/site-packages/src/images
+export X509_USER_PROXY=$STATEDIR/proxy/proxy.cert
+export X509_USER_CERT=$X509_USER_PROXY
+export X509_USER_KEY=$X509_USER_PROXY
+export STAGEDIR=$STATEDIR/stagingarea
+export DAS_CONFIG=$ROOT/config/$ME/das_cms.py
+export DAS_CONFIG_CLI=$ROOT/config/$ME/das_cms_cli.py
+mkdir -p $STAGEDIR
+
+cd $STATEDIR
+host=`hostname -s`
+
+# download metadata and stage it for update
+# change is applied on next updatedata() call
+fetchmaps(){
+  set -e
+  # fetch DAS maps
+  DASMAPS_URL="https://raw.github.com/dmwm/DASMaps/master/js"
+  DASMAPS_DIR=$STAGEDIR/DASMaps
+  mkdir -p $DASMAPS_DIR
+  $DAS_ROOT/bin/das_js_fetch $DASMAPS_URL $DASMAPS_DIR
+
+  # validate DAS maps
+  $DAS_ROOT/bin/das_js_validate $DASMAPS_DIR
+
+  # clean-up STEGEDIR area
+  rm -f $STAGEDIR/*.js $STAGEDIR/*-schema-stamp
+
+  # copy DAS maps into STAGEDIR
+  cp -r $DASMAPS_DIR/* $STAGEDIR
+
+  # mark that we updated MongoDB with DAS maps
+  echo "Fetched maps: `date`" > $STAGEDIR/das_maps_status
+
+  # clean-up DASMAPS_DIR
+  rm -rf $DASMAPS_DIR
+
+  set +e
+}
+
+# Start service conditionally on crond restart.
+sysboot()
+{
+  dostart=false
+  if [ $(pgrep -u $(id -u) -f "[/]das_server.py" | wc -l) = 0 ]; then
+      dostart=true
+  fi
+  $dostart && start
+}
+
+# use global variable to assign DAS server status
+das_status="no"
+
+# helper function to check DAS server status
+check4das() {
+    das_cmd=`curl -H "cms-auth-status:NONE" -s http://localhost:8212/das/nsystems | egrep -i "DAS systems" | grep -i "dbs"`
+    if  [ -n "$das_cmd" ]; then
+        das_status="ok"
+        return
+    fi
+    das_status="no"
+    return
+}
+
+# helper function to wait for DAS server to start
+# it will incrementally increase waiting time with 20 iterations (~3minute)
+start_das_cli() {
+    sleep 30
+    local counter=0
+    # check if mongodb is running
+    while [  $counter -lt 20 ]; do
+        check4das
+        if [ "$das_status" == "ok" ]; then
+            DASMAPS_DIR=$STAGEDIR LD_PRELOAD=$JEMALLOC_ROOT/lib/libjemalloc.so $DAS_ROOT/bin/das_server start_cli \
+              </dev/null 2>&1 | rotatelogs $LOGDIR/das_cli-%Y%m%d.log 86400 >/dev/null 2>&1 &
+            return
+        fi
+        let counter=counter+1
+        echo "DAS web server is not running, check in $counter sec"
+        sleep $counter
+    done
+    check4das
+    if [ "$das_status" == "no" ]; then
+        echo "DAS web server is not running, unable to start DAS cli server"
+        exit 1
+    fi
+}
+
+start()
+{
+  echo "starting $ME"
+  # choose correct DAS map file
+  case $host in vocms012[67] | vocms013[12] ) tbed="_testbed" dbspace="_int";; * ) tbed="" dbspace="_prod";; esac
+  local mapfile=$STAGEDIR/das${tbed}_maps_dbs${dbspace}.js
+  cp -f $mapfile $STAGEDIR/update_mapping_db.js
+  # start DAS service (it will load DAS maps into MongoDB and start DAS server)
+  DASMAPS_DIR=$STAGEDIR LD_PRELOAD=$JEMALLOC_ROOT/lib/libjemalloc.so $DAS_ROOT/bin/das_server start \
+      </dev/null 2>&1 | rotatelogs $LOGDIR/das-%Y%m%d.log 86400 >/dev/null 2>&1 &
+  # start DAS cli server in background since we need to wait for DAS web server/MongoDB
+  start_das_cli &
+}
+
+# Stop the service.
+stop()
+{
+  echo "stopping $ME"
+  for das_pid in $(pgrep -u $(id -u) -f "[/]das_server"); do
+      kill -9 $das_pid
+  done
+}
+
+# Check if the server is running.
+status()
+{
+  local pid=$(pgrep -u $(id -u) -f "[/]das_server" | sort -n)
+  if [ X"$pid" = X ]; then
+    echo $echo_e "$ME $pat is ${COLOR_WARN}NOT RUNNING${COLOR_NORMAL}."
+  else
+    echo $echo_e "$ME $pat is ${COLOR_OK}RUNNING${COLOR_NORMAL}, PID" $pid
+  fi
+}
+
+# Verify the security string.
+check()
+{
+  CHECK=$(echo "$1" | md5sum | awk '{print $1}')
+  if [ $CHECK != 94e261a5a70785552d34a65068819993 ]; then
+    echo "$0: cannot complete operation, please check documentation." 1>&2
+    exit 2;
+  fi
+}
+
+# Main routine, perform action requested on command line.
+case ${1:-status} in
+  sysboot )
+    sysboot
+    ;;
+
+  start | restart )
+    check "$2"
+    stop
+    start
+    ;;
+
+  status )
+    status
+    ;;
+
+  fetchmaps )
+    check "$2"
+    fetchmaps
+    ;;
+
+  stop )
+    check "$2"
+    stop
+    ;;
+
+  help )
+    perl -ne '/^##H/ && do { s/^##H ?//; print }' < $0
+    ;;
+
+  version )
+    echo "$DAS_VERSION"
+    ;;
+
+  * )
+    echo "$0: unknown action '$1', please try '$0 help' or documentation." 1>&2
+    exit 1
+    ;;
+esac

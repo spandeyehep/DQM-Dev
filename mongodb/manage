@@ -1,0 +1,153 @@
+#!/bin/sh
+
+##H Usage: manage ACTION [SECURITY-STRING]
+##H
+##H Available actions:
+##H   help        show this help
+##H   version     get current version of the service
+##H   status      show current service's status
+##H   sysboot     start server from crond if not running
+##H   restart     (re)start the service
+##H   start       (re)start the service
+##H   stop        stop the service
+##H
+##H For more details please refer to operations page:
+##H   https://twiki.cern.ch/twiki/bin/view/CMS/DASOperation
+
+if [ $(id -un)  = cmsweb ]; then
+  echo "ERROR: please use another account" 1>&2
+  exit 1
+fi
+
+echo_e=-e
+case $(uname) in Darwin )
+  md5sum() { md5 -r ${1+"$@"}; }
+  echo_e=
+  ;;
+esac
+
+ME=$(basename $(dirname $0))
+TOP=$(cd $(dirname $0)/../../.. && pwd)
+ROOT=$(cd $(dirname $0)/../.. && pwd)
+CFGDIR=$(dirname $0)
+LOGDIR=$TOP/logs/$ME
+STATEDIR=$TOP/state/$ME
+COLOR_OK="\\033[0;32m"
+COLOR_WARN="\\033[0;31m"
+COLOR_NORMAL="\\033[0;39m"
+
+. $ROOT/apps/mongo/etc/profile.d/init.sh
+cd $STATEDIR
+
+# Start service conditionally on crond restart.
+sysboot()
+{
+  PID=$(cat $STATEDIR/db/mongod.lock 2>/dev/null)
+  if [ X"$PID" = X ] || [ $(ps -o pid= -p $PID | wc -l) = 0 ]; then
+    # must clean-up improper shutdown
+    rm -rf $STATEDIR/db/*
+    rm -f $PWD/stagingarea/*-schema-stamp
+    start
+  fi
+}
+
+# Start the service.
+start()
+{
+  echo "starting $ME"
+  if  [ -f /usr/bin/numactl ]; then
+      cmd="numactl --interleave=all"
+  else
+      cmd=""
+  fi
+  $cmd $MONGO_ROOT/bin/mongod --dbpath=$STATEDIR/db \
+      --port 8230 --quiet --nojournal --nohttpinterface --bind_ip 127.0.0.1 \
+      </dev/null 2>&1 | rotatelogs $LOGDIR/mongodb-%Y%m%d.log 86400 >/dev/null 2>&1 &
+
+  n=0 started=false
+  while [ $n -le 300 ]; do
+    curl -s 127.0.0.1:8230 | grep -s -q 'MongoDB' 2>&1 1>& /dev/null && started=true && break
+    echo "waiting for $ME..."
+    sleep 1
+    n=$(expr $n + 1)
+  done
+
+  if $started; then
+    echo "$ME is ready"
+  else
+    echo "$ME did not start, not cleaning nor updating."
+    exit 1
+  fi
+}
+
+# Stop the service.
+stop()
+{
+  echo "stopping $ME"
+  PID=$(cat $STATEDIR/db/mongod.lock 2>/dev/null)
+  if [ X"$PID" != X ]; then
+    kill -INT $PID
+    n=0
+    while [ -s $STATEDIR/db/mongod.lock -a $n -le 10 ]; do
+      echo "Waiting for mongod to exit..."
+      n=$(expr $n + 1)
+      sleep 1
+    done
+  fi
+}
+
+# Check if the server is running.
+status()
+{
+  PID=$(cat $STATEDIR/db/mongod.lock 2>/dev/null)
+  if [ X"$PID" != X ] && [ $(ps -p $PID | wc -l) != 0 ]; then
+    echo $echo_e "$ME is ${COLOR_OK}RUNNING${COLOR_NORMAL}, PID" $PID
+  else
+    echo $echo_e "$ME is ${COLOR_WARN}NOT RUNNING${COLOR_NORMAL}."
+  fi
+}
+
+# Verify the security string.
+check()
+{
+  CHECK=$(echo "$1" | md5sum | awk '{print $1}')
+  if [ $CHECK != 94e261a5a70785552d34a65068819993 ]; then
+    echo "$0: cannot complete operation, please check documentation." 1>&2
+    exit 2;
+  fi
+}
+
+# Main routine, perform action requested on command line.
+case ${1:-status} in
+  sysboot )
+    sysboot
+    ;;
+
+  start | restart )
+    check "$2"
+    stop
+    start
+    ;;
+
+  status )
+    status
+    ;;
+
+  stop )
+    check "$2"
+    stop
+    ;;
+
+  help )
+    perl -ne '/^##H/ && do { s/^##H ?//; print }' < $0
+    ;;
+
+  version )
+    echo "$MONGO_VERSION"
+    ;;
+
+  * )
+    echo "$0: unknown action '$1', please try '$0 help' or documentation." 1>&2
+    exit 1
+    ;;
+esac

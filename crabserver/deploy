@@ -1,0 +1,99 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_crabserver_variants="default prod preprod dev"
+
+deploy_crabserver_deps()
+{
+  deploy $stage backend
+  deploy $stage wmcore-auth
+}
+
+deploy_crabserver_prep()
+{
+  mkproj
+  mkproxy
+}
+
+deploy_crabserver_sw()
+{
+  local secrets=
+  case $variant in prod | preprod ) secrets= ;; * ) secrets=-dev ;; esac
+  deploy_pkg \
+     -a dmwm-service-cert.pem:wmcore/dmwm-service-cert.pem \
+     -a dmwm-service-key.pem:wmcore/dmwm-service-key.pem \
+     -a CRABServerAuth.py:crabserver/CRABServerAuth${secrets}.py \
+     comp cms+crabserver
+  if grep -rq "replace me" $project_auth; then
+    note "WARNING: replace certificates in $project_auth with real ones"
+  else :; fi
+
+  case $variant in
+    prod )    extconfig=$variant; aso="";;
+    preprod ) extconfig=$variant; aso="-testbed";;
+    * )       extconfig=dev;      aso="-dev";;
+  esac
+  echo "data.mode = \"cmsweb-$extconfig\"" >> $root/$cfgversion/config/$project/config.py
+  touch $root/$cfgversion/config/$project/condor_config
+  perl -p -i -e "s;/prod/info;/$extconfig/info;g" $root/$cfgversion/config/$project/monitoring.ini
+}
+
+deploy_crabserver_post()
+{
+  case $host in vocms013[89] | vocms014[01] | vocms0307 | vocms0318 ) disable ;; * ) enable ;; esac
+  (mkcrontab 
+   sysboot
+
+   # Restart crab once every four days to release leaked memory
+   case $host in vocms0161 ) d=2;; vocms0163 ) d=3;; vocms0165 ) d=4;; * ) d=1;; esac
+   local cmd="$project_config/manage start 'I did read documentation'"
+   $nogroups || cmd="sudo -H -u _crabserver bashs -l -c \"${cmd}\""
+   echo "0 9 $d-31/4 * * $cmd &> /dev/null"
+  ) | crontab -
+}
+
+deploy_crabserver_auth()
+{
+  case $1 in
+    */*-cert.pem )
+      echo "replace me with your dmwm service certificate" ;;
+    */*-key.pem )
+      echo "replace me with your dmwm service key" ;;
+    */CRABServerAuth*.py )
+      cat <<- \EOF
+import cx_Oracle as DB
+import socket
+fqdn = socket.getfqdn().lower()
+dbconfig = {'preprod': {'.title': 'Pre-production',
+                        '.order': 1,
+                        '*': {'clientid': 'cmsweb-preprod@%s' %(fqdn),
+                              'dsn': 'devdb11_FIXME',
+                              'liveness': 'select sysdate from dual',
+                              'password': 'FIXME',
+                              'schema': 'cmsweb_analysis_preprod',
+                              'timeout': 300,
+                              'trace': True,
+                              'type': DB,
+                              'user': 'cmsweb_analysis_preprod_FIXME'}},
+            'prod': {'.title': 'Production',
+                     '.order': 0,
+                     'GET': {'clientid': 'cmsweb-prod-r@%s' %(fqdn),
+                             'dsn': 'cmsr_FIXME',
+                             'liveness': 'select sysdate from dual',
+                             'password': 'FIXME',
+                             'schema': 'cms_analysis_reqmgr_r',
+                             'timeout': 300,
+                             'trace': True,
+                             'type': DB,
+                             'user': 'cms_analysis_reqmgr_r_FIXME'},
+                     '*':  {'clientid': 'cmsweb-prod-w@%s' %(fqdn),
+                            'dsn': 'cmsr_FIXME',
+                            'liveness': 'select sysdate from dual',
+                            'password': 'FIXME',
+                            'schema': 'cms_analysis_reqmgr_w',
+                            'timeout': 300,
+                            'trace': True,
+                            'type': DB,
+                            'user': 'cms_analysis_reqmgr_w_FIXME'}}}
+EOF
+      ;;
+  esac
+}

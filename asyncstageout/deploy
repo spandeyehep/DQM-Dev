@@ -1,0 +1,86 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_asyncstageout_variants="default offsite"
+deploy_asyncstageout_deps()
+{
+  deploy $stage couchdb
+}
+
+deploy_asyncstageout_prep()
+{
+  case $variant in offsite) opts= ;; *) opts="-s -l" ;; esac
+  mkproj $opts
+}
+
+deploy_asyncstageout_sw()
+{
+  deploy_pkg comp cms+asyncstageout
+}
+
+deploy_asyncstageout_post()
+{
+  case $variant in
+    offsite )
+      mkdir -p $root/$cfgversion/install/couchdb
+
+      mkdir -p $root/$cfgversion/install/asyncstageout
+      mkdir -p $root/$cfgversion/config/asyncstageout
+
+      # Tell couchdb to pick up AsyncTransfer on the next restart
+      # and configure replication, compaction and backup, too
+      local couchdb_config=$root/$cfgversion/config/couchdb
+      local couchdb_state=$root/state/couchdb
+
+      local couchdb_ini=$root/$cfgversion/config/asyncstageout/local.ini
+      perl -p -i -e "s{deploy_project_root}{$root/$cfgversion/install}g" $couchdb_ini
+      cp -f $couchdb_ini $root/$cfgversion/config/couchdb
+
+      for area in stagingarea replication; do
+         rm -f $couchdb_state/$area/asyncstageout
+         touch $couchdb_state/$area/asyncstageout
+      done
+      ;;
+    default )
+      # Tell couch to push the AlertsCollector couchapp on the next restart
+      couch=couchdb:5984
+      rm -f $root/state/${couch%%:*}/stagingarea/asyncstageout
+      for db in asynctransfer asynctransfer1; do
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/AsyncTransfer" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/DBSPublisher" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/monitor" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/MonitorByDest" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/MonitorBySource" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/MonitorFilesCount" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/MonitorStartedEnded" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/ftscp" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+        echo "couchapp push " \
+             "$root/$cfgversion/apps.$glabel/asyncstageout/couchapp/AsyncTransferErl" \
+             "http://localhost:${couch##*:}/$db" \
+             >> $root/state/${couch%%:*}/stagingarea/asyncstageout
+      done
+      ;;
+  esac
+}

@@ -1,0 +1,71 @@
+#!/bin/sh
+
+### Usage: ProxySeed [-h] [-t TYPE] [-d DESTINATION]
+###
+### Creates a new long-lived proxy of TYPE kind, either 'dev' or 'prod', and
+### installs it into DESTINATION which must be a directory 'scp' can copy to.
+### DESTINATION defaults to '/data/current/auth/proxy', TYPE to 'DevVM'.
+###
+### Examples:
+###   ProxySeed
+###   ProxySeed -t dev -d /data/current/auth/proxy
+###   ProxySeed -t prod -d cmsweb@$(hostname):/data/srv/hg1103a/auth/proxy
+
+usage()
+{
+  perl -ne '/^### Usage:/ && do { s/^### ?//; print }' < $0
+  exit 1
+}
+
+try()
+{
+  for try in 1 2 3; do
+    (set -x; eval ${1+"$@"})
+    [ $? = 0 ] && return
+  done
+}
+
+type=dev dest=/data/current/auth/proxy
+pxparam="-x -c 720 -t 36 -s myproxy.cern.ch"
+shost=$(hostname -s | tr [:upper:]- [:lower:]_)
+fhost=$(hostname -f)
+me=$(id -un)
+for arg; do
+  case $arg in
+    -t) case $2 in
+          dev | prod ) type="$2"; shift; shift;;
+          * ) echo "$2: bad proxy type, try 'dev' or 'prod'" 1>&2; exit 1;;
+        esac ;;
+    -d) dest="$2"; shift; shift ;;
+    -h) perl -ne '/^###/ && do { s/^### ?//; print }' < $0; exit 0;;
+    --) shift; break ;;
+    -*) usage; exit 1 ;;
+  esac
+done
+
+[ $(uname) = Darwin ] && exit 0 # deactivated for now
+
+# Skip proxy seeding if we don't appear to have apps that need one.
+case $dest in /* )
+  if [ -d $dest ]; then :; else
+    echo "$dest: no such directory, skipping proxy setup" 1>&2
+    exit 0
+  fi ;;
+esac
+
+[ $# = 0 ] || usage
+
+if [ -x /usr/bin/myproxy-init -a -x /usr/bin/voms-proxy-init ]; then :; else
+  source /afs/cern.ch/project/gd/LCG-share/sl5/etc/profile.d/grid_env.sh
+fi
+export GT_PROXY_MODE="rfc"
+
+case $type in
+  dev )
+    try myproxy-init $pxparam -R "*/CN=$fhost" -l devvm_${shost}_$me ;;
+
+  prod )
+    try myproxy-init $pxparam -R "*/CN=*cms*.cern.ch" -l cmsweb_backends_$me ;;
+esac
+try voms-proxy-init -rfc -voms cms -valid 36:00
+try scp -p /tmp/x509up_u$(id -u) $dest/seed-$me.cert

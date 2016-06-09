@@ -1,0 +1,101 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_sitedb_variants="default"
+deploy_sitedb_deps()
+{
+  deploy $stage backend
+  deploy $stage wmcore-auth
+}
+
+deploy_sitedb_prep()
+{
+  mkproj
+}
+
+deploy_sitedb_sw()
+{
+  deploy_pkg -a sitedb/SiteDBAuth.py comp cms+sitedb
+}
+
+deploy_sitedb_post()
+{
+  case $host in vocms013[89] | vocms014[01] | vocms0307 | vocms0318 ) disable ;; * ) enable ;; esac
+  (mkcrontab; sysboot) | crontab -
+}
+
+deploy_sitedb_auth()
+{
+  case $1 in
+    */SiteDBAuth.py)
+      cat <<- \EOF
+import cx_Oracle as DB
+import socket
+
+fqdn = socket.getfqdn().lower()
+dbparam = {
+     'prod': { '.title': 'Production',
+               '.order': 0,
+
+		    'GET': { 'type': DB,
+		             'trace': False,
+		             'schema': "cms_sitedb",
+		             'clientid': "sitedb-web@%s" % fqdn,
+		             'liveness': "select sysdate from dual",
+		             'user': "cms_sitedb_reader_fixme",
+                   'password': "FIXME",
+                   'dsn': "cms_sitedb_fixme",
+                   'timeout': 300 },
+
+		    '*': { 'type': DB,
+		           'trace': False,
+		           'schema': "cms_sitedb",
+		           'clientid': "sitedb-web@%s" % fqdn,
+		           'liveness': "select sysdate from dual",
+                 'user': "cms_sitedb_writer_fixme",
+                 'password': "FIXME",
+                 'dsn': "cms_sitedb_fixme",
+                 'timeout': 60 }
+             },
+
+     'dev':  { '.title': 'Dev',
+               '.order': 1,
+
+          'GET': { 'type': DB,
+                   'trace': True,
+                   'schema': "cms_sitedb",
+                   'clientid': "sitedb-web@%s" % fqdn,
+                   'liveness': "select sysdate from dual",
+                   'user': "cms_sitedb_reader_fixme",
+                   'password': "FIXME",
+                   'dsn': "devdb11_fixme",
+                   'timeout': 300 },
+
+		    '*': { 'type': DB,
+		           'trace': True,
+		           'schema': "cms_sitedb",
+		           'clientid': "sitedb-web@%s" % fqdn,
+		           'liveness': "select sysdate from dual",
+                 'user': "cms_sitedb_writer_fixme",
+                 'password': "FIXME",
+                 'dsn': "devdb11_fixme",
+                 'timeout': 60 }
+             },
+
+     'test': { '.title': 'My Test',
+               '.order': 2,
+
+          '*': { 'type': DB,
+                 'trace': True,
+                 'schema': "FIXME",
+                 'clientid': "sitedb-web@%s" % fqdn,
+                 'liveness': "select sysdate from dual",
+                 'user': "FIXME",
+                 'password': "FIXME",
+                 #'auth-role': ("sitedb_website_fixme", "FIXME"),
+                 'dsn': "devdb11_fixme",
+                 'timeout': 300 }
+             }
+}
+EOF
+    ;;
+  esac
+}

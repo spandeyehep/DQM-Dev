@@ -1,0 +1,538 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_system_variants="frontend backend image devvm devmac"
+system_arch=$(uname)
+: ${CMS_DEV_ROOT:=/data}
+
+# Ask for confirmation
+confirm()
+{
+  key=$(perl -e 'print map{chr(1+32*(2+int(rand(2)))+int(rand(26)))} 0..9')
+  echo; echo "********************************************"
+  echo -n "*** $1? if yes, say [$key]: "
+  read answer
+  case $answer in
+    $key ) true ;;
+    * ) exit 2 ;;
+  esac
+}
+
+# Add a local group if it doesn't already exist.
+add_local_group()
+{
+  local add_user=$1 id=$2 name=$3
+  case $system_arch in
+    Linux )
+      if getent group | grep -q "^$name:"; then :; else
+        sudo /usr/sbin/groupadd -g $id $name
+        [ X$add_user != XT ] || sudo /usr/sbin/usermod -a -G $name $USER
+      fi ;;
+
+    Darwin )
+      if sudo dscl . -read /Groups/$name 2>/dev/null; then
+        local gid=$(sudo dscl . -read /Groups/$name PrimaryGroupID | awk '{print $NF}')
+        if [ X"$gid" = X$id ]; then :; else
+          note "WARNING: group $name already exists with id $gid != requested $id"
+	fi
+      else
+        sudo dscl . -create /Groups/$name
+	sudo dscl . -create /Groups/$name PrimaryGroupID $id
+	sudo dscl . -create /Groups/$name RealName "CMSWEB $name"
+	sudo dscl . -create /Groups/$name Password "*"
+	if [ X$add_user != XT ]; then :; else
+	  sudo dscl . -append /Groups/$name GroupMembership $USER
+	fi
+      fi
+      ;;
+
+    * )
+      note "ERROR: don't know how to create groups on this system"
+      exit 1 ;;
+  esac
+}
+
+# Create a local user if it doesn't already exist.
+add_local_user()
+{
+  local id=$1 login=$2 xgroup=$3 name=$4
+  case $system_arch in
+    Linux )
+      if getent passwd | grep -q "^$login:"; then :; else
+        sudo /usr/sbin/useradd -M -g $login -G $login$xgroup -c "CMSWEB $name,,," \
+                               -d $CMS_DEV_ROOT/empty -s /sbin/nologin -u $id $login
+      fi ;;
+
+    Darwin )
+      local gid=$(sudo dscl . -read /Groups/$login PrimaryGroupID | awk '{print $NF}')
+      if sudo dscl . -read /Users/$login 2>/dev/null; then
+        local uid=$(sudo dscl . -read /Users/$name UniqueID | awk '{print $NF}')
+        if [ X"$uid" = X$id ]; then :; else
+          note "WARNING: user $login already exists with id $uid != requested $id"
+	fi
+      else
+        sudo dscl . -create /Users/$login
+        sudo dscl . -create /Users/$login UserShell /sbin/nologin
+        sudo dscl . -create /Users/$login RealName "CMSWEB $name"
+        sudo dscl . -create /Users/$login UniqueID $id
+        sudo dscl . -create /Users/$login PrimaryGroupID $gid
+        sudo dscl . -create /Users/$login NFSHomeDirectory $CMS_DEV_ROOT/empty
+        sudo dscl . -passwd /Users/$login "*"
+        for group in $(echo $xgroup | tr , ' '); do
+          sudo dscl . -append /Groups/$group GroupMembership $login
+        done
+      fi
+      ;;
+
+    * )
+      note "ERROR: don't know how to create accounts on this system"
+      exit 1 ;;
+  esac
+}
+
+# Set protections on local ($CMS_DEV_ROOT/certs) host certificate files.
+hostcert_local_prot()
+{
+  sudo chown $USER:_config $CMS_DEV_ROOT/certs/host{cert,key}.pem
+  sudo chmod 644 $CMS_DEV_ROOT/certs/hostcert.pem
+  sudo chmod 400 $CMS_DEV_ROOT/certs/hostkey.pem
+}
+
+# Install host certificate from local ($CMS_DEV_ROOT/certs) to the system
+# directory (/etc/grid-security), with appropriate file ownerships.
+hostcert_to_system()
+{
+  [ -d /etc/grid-security ] || { note "ERROR: no /etc/grid-security!?"; exit 1; }
+  sudo cp $CMS_DEV_ROOT/certs/host{cert,key}.pem /etc/grid-security
+  sudo chown root:$(id -gn root) /etc/grid-security/host{cert,key}.pem
+  sudo chmod 644 /etc/grid-security/hostcert.pem
+  sudo chmod 400 /etc/grid-security/hostkey.pem
+}
+
+# Create all the special groups and accounts.
+system_groups_and_accounts()
+{
+  # Create groups. Add myself to all the groups.
+  for ng in T:100000:_config    F:100001:_empty       T:100002:_sw           \
+            T:100003:_auth      T:100010:_frontend    T:100020:_admin        \
+            T:100021:_base      T:100022:_couchdb     T:100023:_das          \
+            T:100024:_dbs       T:100026:_dqmgui      T:100027:_filemover    \
+            T:100028:_overview  T:100029:_phedex      T:100030:_sitedb       \
+            T:100031:_t0mon     T:100032:_mongodb     T:100033:_reqmgr       \
+            T:100034:_workqueue T:100035:_configcache T:100037:_t0datasvc    \
+            T:100038:_reqmon    T:100039:_crabserver  T:100040:_crabcache    \
+            T:100041:_dmwmmon   T:100042:_an_reqmgr   T:100043:_an_workqueue \
+            T:100044:_an_reqmon T:100045:_t0wmadatasvc T:100046:_dbsmigration\
+            T:100047:_t0_reqmon T:100048:_reqmgr2     T:100049:_acdcserver   \
+            T:100050:_gitweb    T:100051:_bigcouch    T:100052:_victorweb    \
+            T:100053:_popdbweb  T:100054:_dcafpilot   T:100055:_confdb       \
+            T:100056:_wmarchive; do
+    add_local_group $(echo $ng | tr : " ")
+  done
+
+  # Create accounts
+  add_local_user 100001 _empty       ""       "Void"
+  add_local_user 100002 _sw          ,_config "Master"
+  add_local_user 100003 _auth        ,_config "Auth Agent"
+  add_local_user 100010 _frontend    ,_config "Front-End"
+  add_local_user 100020 _admin       ,_config "Admin"
+  add_local_user 100021 _base        ,_config "Base App"
+  add_local_user 100022 _couchdb     ,_config "CouchDB App"
+  add_local_user 100023 _das         ,_config "DAS App"
+  add_local_user 100024 _dbs         ,_config "DBS App"
+  add_local_user 100026 _dqmgui      ,_config "DQM GUI App"
+  add_local_user 100027 _filemover   ,_config "FileMover App"
+  add_local_user 100028 _overview    ,_config "Overview App"
+  add_local_user 100029 _phedex      ,_config "PhEDEx App"
+  add_local_user 100030 _sitedb      ,_config "SiteDB App"
+  add_local_user 100031 _t0mon       ,_config "T0Mon App"
+  add_local_user 100032 _mongodb     ,_config "MongoDB App"
+  add_local_user 100033 _reqmgr      ,_config "ReqMgr App"
+  add_local_user 100034 _workqueue   ,_config "WorkQueue App"
+  add_local_user 100035 _configcache ,_config "ConfigCache App"
+  add_local_user 100037 _t0datasvc   ,_config "T0DataSvc App"
+  add_local_user 100038 _reqmon      ,_config "ReqMon App"
+  add_local_user 100039 _crabserver  ,_config "CRABServer App"
+  add_local_user 100040 _crabcache   ,_config "CRABCache App"
+  add_local_user 100041 _dmwmmon     ,_config "DMWMMon App"
+  add_local_user 100042 _an_reqmgr   ,_config "ReqMgr App for Analysis"
+  add_local_user 100043 _an_workqueue ,_config "WorkQueue App for Analysis"
+  add_local_user 100044 _an_reqmon    ,_config "ReqMon App for Analysis"
+  add_local_user 100045 _t0wmadatasvc ,_config "T0 WMAgent Data Service App"
+  add_local_user 100046 _dbsmigration ,_config "DBS Migration Server"
+  add_local_user 100047 _t0_reqmon    ,_config "ReqMon App for T0"
+  add_local_user 100048 _reqmgr2      ,_config "ReqMgr2 App"
+  add_local_user 100049 _acdcserver   ,_config "ACDC Server App"
+  add_local_user 100050 _gitweb       ,_config "GitWeb App"
+  add_local_user 100051 _bigcouch     ,_config "BigCouch App"
+  add_local_user 100052 _victorweb   ,_config "Victor Cleaner App"
+  add_local_user 100053 _popdbweb    ,_config "CMS Popularity App"
+  add_local_user 100054 _dcafpilot   ,_config "DCAFPilot App"
+  add_local_user 100055 _confdb      ,_config "ConfDB App"
+  add_local_user 100056 _wmarchive   ,_config "WMArchive App"
+
+  # Restart nscd to flush account changes. Current account will _not_
+  # see these changes before logout/login however, so commands below
+  # cannot rely on fully propagated group ownership!
+  # Ignore if nscd is not running (as for SLC6 VMs).
+  case $system_arch in Linux )
+    sudo /sbin/service nscd restart || true ;;
+  esac
+}
+
+# Create basic required directories.
+system_basic_directories()
+{
+  sudo mkdir -p $CMS_DEV_ROOT
+  sudo chown $USER:_sw $CMS_DEV_ROOT
+  sudo chmod 0775 $CMS_DEV_ROOT
+
+  mkdir -p $CMS_DEV_ROOT/user
+  chown $USER:$MYGROUP $CMS_DEV_ROOT/user
+  chmod 0775 $CMS_DEV_ROOT/user
+
+  sudo rm -fr $CMS_DEV_ROOT/empty
+  mkdir -p $CMS_DEV_ROOT/empty
+  echo "umask 002" > $CMS_DEV_ROOT/empty/.profile
+  chmod 444 $CMS_DEV_ROOT/empty/.profile
+  chmod 555 $CMS_DEV_ROOT/empty
+  sudo chown -R _empty:_empty $CMS_DEV_ROOT/empty
+}
+
+# Install host certificate $USER:_config owned in $CMS_DEV_ROOT/certs.
+system_install_hostcert()
+{
+  # If we don't have host{cert,key}.pem in $CMS_DEV_ROOT/certs nor in
+  # /etc/grid-security, create a pair using whatever means known,
+  # falling back on creating a fake one. If we have the certs
+  # already in one place, copy them to the other.
+  [ -d /etc/grid-security ]
+  mkdir -p $CMS_DEV_ROOT/certs
+  sudo chown $USER:_config $CMS_DEV_ROOT/certs
+  sudo chmod 0775 $CMS_DEV_ROOT/certs
+  local line cert certstatus badcert=true
+  for cert in $CMS_DEV_ROOT/certs/hostcert.pem /etc/grid-security/hostcert.pem; do
+    if [ -f $cert ]; then
+      if $(openssl x509 -in $cert -noout -checkend $((30 * 86400))); then
+        badcert=false certstatus="remains valid for at least a month"
+      else
+        certstatus="does not have enough life left and will be renewed"
+      fi
+      note "NOTE: $cert $certstatus"
+      openssl x509 -in $cert -noout -dates |
+        while read line; do note "NOTE:   $line"; done
+    else
+      note "NOTE: no $cert"
+    fi
+  done
+  if $badcert; then
+    # no valid cert with enough life left was found. Getting a new one
+    case $(hostname -f) in
+      *.cern.ch )
+	(set -e
+         cd /tmp
+         tmp=$(mktemp -d -t cert-$$-XXXXX)
+         req=$(hostname -s).csr
+         cn=/CN=$(hostname -f)
+         cd $tmp
+         note "WARNING: requesting now a new grid host certificate via gridca.cern.ch"
+         note "WARNING: it will use your kerberos credentials for the Single Sign On."
+         openssl req -new -subj $cn -out $req -nodes -sha512 -newkey rsa:2048 -keyout hostkey.pem
+         $project_config_src/careq-cern-ch $req hostcert.pem 1>&11 2>&22
+         chmod 400 $req hostkey.pem
+         chmod 644 hostcert.pem
+         mv -f $req host{key,cert}.pem $CMS_DEV_ROOT/certs
+         rm -r $tmp)
+	[ $? = 0 ]
+	;;
+
+      * )
+	note "WARNING: no hostcert.pem in $CMS_DEV_ROOT/certs or /etc/grid-security"
+	note "WARNING: creating fake host certificate, replace with real one!"
+	(set -e
+	 umask 077
+	 openssl genrsa -out $CMS_DEV_ROOT/certs/hostkey.pem 1024
+	 umask 022
+	 openssl req -new -key $CMS_DEV_ROOT/certs/hostkey.pem \
+	   -subj /DC=ch/DC=cern/OU=computers$cn | openssl x509 -req -days 365 \
+	   -signkey $CMS_DEV_ROOT/certs/hostkey.pem -out $CMS_DEV_ROOT/certs/hostcert.pem)
+	[ $? = 0 ]
+	;;
+    esac
+  fi
+
+  if [ -f $CMS_DEV_ROOT/certs/hostcert.pem ]; then
+    hostcert_local_prot
+    hostcert_to_system
+  else
+    sudo cp /etc/grid-security/host{cert,key}.pem $CMS_DEV_ROOT/certs
+    hostcert_local_prot
+  fi
+}
+
+deploy_system_post()
+{
+  # FIXME: Check machine from right netblock
+  # FIXME: Check external firewall bypass
+  # FIXME: Check (alias) host certificate
+  # FIXME: Check myproxy access using host certificate
+  # FIXME: Check pass-through for online reverse proxy
+  # FIXME: Check clean system install
+  # FIXME: Check machine is in maintenance mode
+  # FIXME: Check VOC owns the machine in CDB and LANDB
+  # FIXME: Check machine uses the right quattor profile
+  # FIXME: Check system firewall rules for ports 80, 443
+  # FIXME: Check access from outside CERN
+  # FIXME: Check access from within CERN
+  # FIXME: Check all operators have 'sms' command access.
+  # FIXME: Check all operators can edit system quattor profiles.
+  # FIXME: Check all operators can login to the system with AFS accounts.
+  # FIXME: Check all operators can sudo commands to root.
+  # FIXME: Check applicable people can ssh to cmsweb account.
+  # FIXME: Check the host executes acron jobs.
+  # FIXME: Check mail to root goes to the operators.
+  # FIXME: Check mail to cmsweb goes to the operators.
+  # FIXME: Check mail bounces to mails sent by cmsweb go to the operators.
+  # FIXME: Check mail from cron jobs goes to the operators.
+  # FIXME: Check mail from acron jobs goes to the operators.
+  # FIXME: Check operators get automatic system log monitor reports.
+  # FIXME: Check system logs are automatically rotated at least once a month.
+  # FIXME: Check the host can make http requests to online DQM GUI via cmsdaq0.cern.ch.
+  # FIXME: Check /data is owned by cmsweb:zh.
+  # FIXME: Check the host can *not* list or copy files to or from castor.
+  # FIXME: Check the cmsweb account can *not* read non-public files from AFS.
+  # FIXME: Check the cmsweb account can *not* write files anywhere on AFS, including cmsweb-owned directories.
+  # FIXME: Check lemon-host-check has no warnings other than the machine being in maintenance mode.
+  case $variant in
+    frontend | backend | image )
+      [ $USER = cmsweb ]
+      [ $HOME = /home/cmsweb ]
+      cd $HOME
+
+      # Verify system installation is up-to-date; should do nothing.
+      sudo sh -c '/usr/bin/puppet agent -t' ||
+        note "WARNING: puppet agent exited with code $?."
+
+      sudo sh -c '/usr/local/sbin/distro_sync.sh &> /dev/null' ||
+        note "WARNING: distro_sync script exited with code $?."
+
+      # Must have various directories.
+      [ -d /data/user ]
+      [ -d /data/certs ]
+      [ -d /data/empty ]
+
+      # Must have AFS token and be able to sudo.
+      /usr/bin/klist -s
+      sudo -l
+
+      # Fetch CRLs
+      sudo sh -c '/usr/sbin/fetch-crl' ||
+          note "WARNING: CRL update failed with exit code $? (probably harmless)."
+
+      # Install logwatch / bashs scanner and patch sendmail scanner.
+      (cd $project_config_src/logwatch; find . -type f -print0 |
+       tar --null -T /dev/stdin -cf -) | sudo tar -C /etc/logwatch -xvvf - \
+         --no-anchored --exclude CVS --exclude .svn --exclude .git \
+         --exclude '*~' --exclude '.#*' --exclude '*.swp'
+      sudo mkdir -p /etc/logwatch/scripts/services
+      sudo cp {/usr/share,/etc}/logwatch/scripts/services/sendmail
+      sudo patch /etc/logwatch/scripts/services/sendmail \
+        < $project_config_src/logwatch-sendmail.patch
+      sudo mv /etc/cron.daily/0logwatch /etc/cron.weekly/ || true
+
+      case $variant in
+        frontend | backend )
+          # Verify the host certificate is ok.
+          note "INFO: cert subject:    " $(openssl x509 -noout -in /data/certs/hostcert.pem -subject)
+          note "INFO: cert fingerprint:" $(openssl x509 -noout -in /data/certs/hostcert.pem -fingerprint)
+          note "INFO: cert validity:   " $(openssl x509 -noout -in /data/certs/hostcert.pem -dates)
+
+          openssl verify -CApath /etc/grid-security/certificates /data/certs/hostcert.pem
+          openssl x509 -noout -in /data/certs/hostcert.pem -days 180 ||
+            { note "ERROR: cert must be valid for at least 180 days"; exit 1; }
+          X=$(echo -n "this is a test" |
+              openssl smime -encrypt -aes128 /data/certs/hostcert.pem | \
+              sudo openssl smime -decrypt -inkey /data/certs/host{key,cert}.pem)
+          case $X in "this is a test" ) ;; * )
+            note "ERROR: cert and key do not match"; exit 1;;
+          esac
+
+          # FIXME: check if the certificates are correct, specially the aliased ones 
+
+          # Set up SSH keys.
+          cp -p /afs/cern.ch/user/c/cmsweb/private/admin/id_dsa_$variant .ssh/id_dsa
+          cp -p /afs/cern.ch/user/c/cmsweb/private/admin/id_dsa_$variant.pub .ssh/id_dsa.pub
+          chmod go-rwx /home/cmsweb/.ssh/id_dsa /home/cmsweb/.ssh/id_dsa.pub
+          ;;
+
+        image )
+          sudo cp /afs/cern.ch/user/c/cmsweb/private/admin/id_dsa_$variant /root/.ssh/id_dsa
+          sudo cp /afs/cern.ch/user/c/cmsweb/private/admin/id_dsa_$variant.pub /root/.ssh/id_dsa.pub
+          sudo chmod go-rwx /root/.ssh/id_dsa /root/.ssh/id_dsa.pub
+
+          note "IMPORTANT: run the following to update /root/.ssh/known_hosts"
+          note "   sudo cfg/admin/ImageKey start"
+          note "   for h in vocms0{306,307,318,12{6,7,8},13{1,2,4,5,6,8,9},14{0,1},16{0,1,2,3,4,5}}{,.cern.ch}; do"
+          note "     echo \$h; sudo cfg/admin/ImageKey run ssh cmsweb@\$h uptime"
+          note "   done"
+          note "   sudo cfg/admin/ImageKey stop"
+          ;;
+      esac
+      ;;
+
+    devmac )
+      # Give myself silent bashs sudo access to all accounts we create.
+      # We don't want to grant as liberal sudo access as in devvm, but
+      # we need NOPASSWD access for the same reasons.
+      sudo perl -n -i -e \
+       'print if !/^'$USER'\s+ALL=\(\%_config\)/;
+	if (! $done && /^\%admin\s+/) {
+          ++$done; print "'$USER'\tALL=(%_config) NOPASSWD: /bin/bashs\n";
+        }' /etc/sudoers
+
+      # Verify mandatory applications have been installed.
+      for required in git stg; do
+        if [ X"$(which $required 2>/dev/null)" = X ]; then
+	  note "ERROR: $required is not installed, try installing from macports"
+	  exit 1
+	fi
+      done
+
+      # Make bashs an alias for bash.
+      if [ -x /bin/bashs ]; then :; else
+        sudo ln -s bash /bin/bashs
+      fi
+
+      # Create groups and accounts.
+      system_groups_and_accounts
+
+      # Create basic required directories.
+      system_basic_directories
+
+      # Install host certificate.
+      system_install_hostcert
+      ;;
+
+    devvm )
+      MYGROUP=$(id -gn)
+      PATH=$PATH:/sbin:/usr/sbin
+
+      # Fix /etc/sudoers. We can't have 'requiretty' as we need crontab
+      # to sudo to service accounts, and we need NOPASSWD so that user
+      # isn't prompted for passwords at every occasion (there's nobody
+      # to give that password anyway for _foo accounts from crontab!).
+      # This will cause a password prompt if user didn't invoke sudo.
+      sudo perl -p -i -e \
+       "s/^(?=Defaults\s+requiretty)/\#/;
+	s/^$USER\s+ALL=\(ALL\)\s+ALL$/$USER ALL=(ALL) NOPASSWD: ALL/" \
+        /etc/sudoers /etc/sudoers.d/cern-config-users 2> /dev/null
+
+      # Install additional yum repositories
+
+      # EGI-trustanchors provides the updated CAs
+      sudo wget -q -O /etc/yum.repos.d/egi-trustanchors.repo \
+        http://repository.egi.eu/sw/production/cas/1/current/repo-files/egi-trustanchors.repo
+
+      # EMI Grid middleware
+      case $arch in
+        slc5*) sudo rpm -ivh --force \
+                 http://emisoft.web.cern.ch/emisoft/dist/EMI/3/sl5/x86_64/base/emi-release-3.0.0-2.el5.noarch.rpm
+               ;;
+        * ) sudo rpm -ivh --force \
+              http://emisoft.web.cern.ch/emisoft/dist/EMI/3/sl6/x86_64/base/emi-release-3.0.0-2.el6.noarch.rpm      
+            ;;
+      esac
+
+      # WLCG specific (needed for getting the cms voms config files)
+      sudo wget -q -O /etc/yum.repos.d/wlcg.sl6.repo \
+        http://linuxsoft.cern.ch/wlcg/wlcg-sl6.repo
+      sudo wget -q -O /etc/pki/rpm-gpg/RPM-GPG-KEY-wlcg \
+        http://linuxsoft.cern.ch/wlcg/RPM-GPG-KEY-wlcg
+
+      # Install additional required packages.
+      note "INFO: installing required system packages. This operation may take a few minutes complete."
+      sudo yum -y install \
+        tk compat-libstdc++-33 'ca_*' dummy-ca-certs lcg-CA \
+	fetch-crl git-all stgit colordiff libXpm-devel finger \
+	$(yum -q list compat-{readline5,libtermcap} perl-ExtUtils-Embed 2>/dev/null | \
+	  grep -v -e '^Installed' -e '^Available' | awk '{print $1}') \
+        libXmu mesa-libGLU arc.x86_64 arc-server
+
+      # Install myproxy and voms tools.
+      sudo yum -y install myproxy wlcg-voms-cms voms-clients3
+
+      # Install cern-get-sso-cookie
+      sudo yum -y install cern-get-sso-cookie
+
+      # Make bashs an alias for bash.
+      if [ -x /bin/bashs ]; then :; else
+        sudo ln -s /bin/bash{,s}
+      fi
+
+      # Update firewall rules, persist change across reboot.
+      local fwchain=INPUT
+      [ -f /etc/sysconfig/iptables.vmoriginal ] || sudo cp -p /etc/sysconfig/iptables{,.vmoriginal}
+      sudo sh -c '/sbin/iptables-restore < /etc/sysconfig/iptables.vmoriginal'
+      [ X"$(sudo fgrep -c RH-Firewall-1-INPUT /etc/sysconfig/iptables.vmoriginal)" = X0 ] ||
+        fwchain=RH-Firewall-1-INPUT
+      sudo /sbin/iptables -I $fwchain 5 -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT
+      sudo /sbin/iptables -I $fwchain 6 -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
+      sudo sh -c '/sbin/iptables-save > /etc/sysconfig/iptables'
+
+      # Enable xinetd, which would run the arc server when needed
+      sudo /sbin/chkconfig --levels 2345 xinetd on
+      sudo /sbin/service xinetd restart
+
+      # Enable fetch-crl cronjob
+      sudo /sbin/chkconfig --levels 2345 fetch-crl-cron on
+      sudo /sbin/service fetch-crl-cron restart
+
+      # Default SLC5/6 installations don't use the whole ephemeral disk
+      # available. Try expanding them automatically.
+      vgroup='VolGroup00' lvolume='LogVol00'
+      if [ X"$(mount |grep $vgroup-$lvolume|awk '{ print $3 }')" = X'/' ]; then
+        note "INFO: default SLC5/6 image detected. Checking if there is unallocated disk space we could use..."
+        # Detect if there is free space at the end of the disk
+        free=$(($(sudo parted -s /dev/vda -- unit B print free|grep 'Free Space' |tail -n1|awk '{ print $3 }' |tr -d 'B')))
+        if [ $free -ge 1000000000 ]; then
+          note "INFO: can resize '/' to increase in $((free / 1000000)) MB. Proceed? (y/n) "
+          read answer
+          case $answer in
+            y )
+              note "INFO: starting to resize. This operation may take a long time to complete. Please wait."
+              # guess the last partition number
+              partno=$(($(sudo fdisk -l /dev/vda |grep '/dev/vda'|tail -n1| awk '{ print $1 }' | egrep -o '[0-9]+')))
+              if [ $partno -gt 0 -a $partno -lt 4 ]; then
+                newpart=$(($partno + 1))
+                # Create a LVM partition, ignore sync failure
+                echo -e "c\np\nn\np\n${newpart}\n\n\nt\n${newpart}\n8e\nw\n" | sudo fdisk /dev/vda || true
+                # Force re-sync
+                sudo partx -a /dev/vda 2> /dev/null # can ignore errors
+                # Increase the size of the logical volume
+                sudo pvcreate /dev/vda$newpart
+                sudo vgextend $vgroup /dev/vda$newpart
+                sudo lvextend /dev/$vgroup/$lvolume /dev/vda$newpart
+                sudo resize2fs /dev/$vgroup/$lvolume
+                note "INFO: partition resizing operation completed successfully."
+              else
+                note "ERROR: not possible to create another primary partition. Ignoring resizing."
+              fi
+              ;;
+            * )
+              note "INFO: keeping disk partition setup as it is."
+              ;;
+          esac
+        else
+          note "INFO: machine already using all the ephemeral vm storage space allocated to it."
+        fi
+      fi
+
+      # Create groups and accounts.
+      system_groups_and_accounts
+
+      # Create basic required directories.
+      system_basic_directories
+
+      # Install host certificate.
+      system_install_hostcert
+      ;;
+  esac
+}

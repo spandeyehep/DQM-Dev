@@ -1,0 +1,99 @@
+#!/bin/sh
+
+### Usage: InstallDev -h
+### Usage: InstallDev [-A arch] [-R RELEASE] [-d DIR] [-S] -s image -v VER -p PKGS [-r A=B] [-a AUTH] [-w RPMHOST] [-u PXUSER]
+### Usage: InstallDev [-A arch] [-R RELEASE] [-d DIR] [-S] -s post[:HOST] -v VER -p PKGS
+### Usage: InstallDev [-A arch] [-R RELEASE] [-d DIR] [-S] -s status[:what]
+### Usage: InstallDev [-A arch] [-R RELEASE] [-d DIR] [-S] -s start[:what]
+### Usage: InstallDev [-A arch] [-R RELEASE] [-d DIR] [-S] -s stop[:what]
+### Use -S if running on the single account setup (for dev/test only)
+
+usage()
+{
+  perl -ne '/^### Usage:/ && do { s/^### ?//; print }' < $0
+  exit 1
+}
+
+help()
+{
+  perl -ne '/^###/ && do { s/^### ?//; print }' < $0
+  exit 0
+}
+
+STAGE= VER= REPO= ACFG= PKGS= ARCH= RELEASE= ROOT=$PWD/srv PXUSER=$USER
+RPMHOST="cmsrep.cern.ch"
+MULTIACC="-a"
+for arg; do
+  case $arg in
+    -d) ROOT="$2"; shift; shift ;;
+    -A) ARCH="-A $2"; shift; shift ;;
+    -R) RELEASE="-R $2"; shift; shift ;;
+    -s) STAGE="$2"; shift; shift ;;
+    -v) VER="$2"; shift; shift ;;
+    -r) REPO="-r $2"; shift; shift ;;
+    -u) PXUSER="$2"; shift; shift ;;
+    -a) ACFG="-p $2"; rm -f $2/auth/wmcore/header-auth-key*; shift; shift ;;
+    -p) PKGS="$2"; shift; shift ;;
+    -w) RPMHOST="$2" shift; shift ;;
+    -S) MULTIACC=; shift ;;
+    -h) help ;;
+    --) shift; break ;;
+    -*) usage ;;
+  esac
+done
+
+[ $# = 0 ] || usage
+[ -d cfg/admin ] || usage
+[ X"$STAGE" = X ] && usage
+
+case $STAGE in
+  status:* | start:* | stop:* | post:* )
+    WHAT=${STAGE#*:} STAGE=${STAGE%:*} ;;
+  post )
+    WHAT=$(hostname -s) ;;
+  status | start | stop )
+    WHAT="*" ;;
+esac
+
+case $STAGE in
+  image | post )
+    [ X"$PKGS" = X ] && usage
+    [ X"$VER" = X ] && usage
+    ;;
+esac
+
+case $STAGE in
+  image )
+    set -ex
+    mkdir -p $ROOT
+    $PWD/cfg/Deploy $ARCH $RELEASE $ACFG $REPO -t $VER $MULTIACC -w $RPMHOST -s prep $ROOT $PKGS
+    [ ! -d $ROOT/$VER/auth/proxy ] ||
+      ssh -o PubkeyAuthentication=no -t $PXUSER@$(hostname) $PWD/cfg/admin/ProxySeed -t dev -d $USER@$(hostname -f):$ROOT/$VER/auth/proxy
+    cmd="$PWD/cfg/Deploy $ARCH $RELEASE $ACFG $REPO -t $VER $MULTIACC -w $RPMHOST -s sw $ROOT $PKGS"
+    case $MULTIACC in -a) sudo -H -u _sw bashs -lc "$cmd";; *) eval $cmd;; esac
+    $PWD/cfg/Deploy $ARCH $RELEASE $REPO -t $VER $MULTIACC -w $RPMHOST -s post $ROOT $PKGS
+    ;;
+
+  post )
+    set -ex
+    $PWD/cfg/Deploy $ARCH $RELEASE -H $WHAT $REPO -t $VER $MULTIACC -w $RPMHOST -s post $ROOT $PKGS
+    ;;
+
+  start | status | stop )
+    set -e
+    for f in $ROOT/enabled/$WHAT; do
+      [ -f "$f" ] || continue
+      app=${f##*/}; case $app in frontend) u=root ;; * ) u=_$app ;; esac
+      (set -x;
+       cmd="$ROOT/current/config/$app/manage $STAGE 'I did read documentation'"
+       case $MULTIACC in -a) sudo -H -u $u bashs -lc "$cmd";; *) eval $cmd;; esac) || true
+    done
+    ;;
+
+  * )
+    echo "$STAGE: bad stage, try -h for help" 1>&2
+    exit 1
+    ;;
+esac
+
+exit 0

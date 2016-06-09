@@ -1,0 +1,59 @@
+#!/bin/sh
+
+##H Usage: manage ACTION [SECURITY-STRING]
+##H
+##H Available actions:
+##H   help        show this help
+##H   status      show current service's status
+##H   configtest  check server configuration
+##H   restart     (re)start the service
+##H   start       (re)start the service
+##H   graceful    restart the service gracefully
+##H   stop        stop the service
+##H
+##H For more details please refer to operations page:
+##H   https://twiki.cern.ch/twiki/bin/view/CMS/ServiceApache
+
+ME=$(basename $(dirname $0))
+TOP=$(cd $(dirname $0)/../../.. && pwd)
+STATEDIR=$TOP/state/$ME
+
+# Detect if we're in single user mode
+case $(uname) in
+  Linux ) t="/etc/rc.d/init.d/httpd";;
+  Darwin) t="/Library/LaunchDaemons/ch.cern.cms.httpd.plist";;
+esac
+[ "$t" -ef "$STATEDIR/etc/httpd" ] && groups=true || groups=false
+
+case ${1:-status} in
+  status | graceful | stop | configtest )
+    if $groups; then
+      case $(uname) in
+        Linux  ) sudo /sbin/service httpd $1 ;;
+        Darwin ) sudo $STATEDIR/etc/httpd $1 ;;
+      esac
+    else
+      $STATEDIR/etc/httpd $1
+    fi
+    ;;
+
+  start | restart )
+    if $groups; then
+      case $(uname) in
+        Linux  ) sudo /sbin/service httpd restart ;;
+        Darwin ) for a in unload load; do sudo launchctl $a -w $t; done ;;
+      esac
+    else
+      $STATEDIR/etc/httpd restart
+    fi
+    ;;
+
+  help )
+    perl -ne '/^##H/ && do { s/^##H ?//; print }' < $0
+    ;;
+
+  * )
+    echo "$0: unknown action '$1', please try '$0 help' or documentation." 1>&2
+    exit 1
+    ;;
+esac

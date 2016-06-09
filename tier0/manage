@@ -1,0 +1,510 @@
+#!/bin/bash
+
+
+#
+# Global variables etc
+#
+THIS_SCRIPT=$(readlink -f $0)
+PROJ_DIR=$(dirname $(dirname $THIS_SCRIPT))
+ROOT_DIR=$(dirname $(dirname $(dirname $THIS_SCRIPT)))
+
+INSTALL_TIER0="$ROOT_DIR/install/tier0"
+INSTALL_COUCH="$ROOT_DIR/install/couchdb"
+
+CONFIG_TIER0="$ROOT_DIR/config/tier0"
+CONFIG_COUCH="$ROOT_DIR/config/couchdb"
+
+USING_TIER0=0
+
+TIER0_INIT_DONE=0
+COUCH_INIT_DONE=0
+
+ORACLE_USER=
+ORACLE_PASS=
+ORACLE_TNS=
+
+COUCH_USER=
+COUCH_PASS=
+
+COUCH_HOST=127.0.0.1
+COUCH_PORT=5984
+COUCH_HOST_NAME=localhost
+COUCH_CERT_FILE=
+COUCH_KEY_FILE=
+
+GLOBAL_WORKQUEUE_URL=
+
+LOCAL_WORKQUEUE_DBNAME=workqueue
+
+WMBS_SERVICE_PORT=9999
+
+WORKLOAD_SUMMARY_URL=
+WMSTATS_URL=
+DBS3_URL=
+PHEDEX_URL=
+DQM_URL=
+DASHBOARD_URL=
+REQUESTCOUCH_URL=
+CENTRAL_LOGDB_URL=
+
+CONFDB_URL=
+SMDB_URL=
+POPCONLOGDB_URL=
+T0DATASVCDB_URL=
+
+#
+# Init checks
+#
+# which of the tier0 and ??? are we using
+if [ -e $INSTALL_TIER0/.using ]; then USING_TIER0=1; else USING_TIER0=0; fi;
+
+# Flags to show which tools have been initialised
+if [ -e $INSTALL_TIER0/.init ]; then TIER0_INIT_DONE=1; else TIER0_INIT_DONE=0; fi;
+if [ -e $INSTALL_COUCH/.init ]; then COUCH_INIT_DONE=1; else COUCH_INIT_DONE=0; fi;
+
+#callbacks to activate or show initialisation has been done
+activate_tier0(){
+    touch $INSTALL_TIER0/.using
+    cat $WMCORE_ROOT/etc/WMAgentConfig.py $T0_ROOT/etc/Tier0Config.py > $CONFIG_TIER0/config-template.py
+}
+
+inited_tier0(){
+    touch $INSTALL_TIER0/.init
+}
+
+inited_couch(){
+    touch $INSTALL_COUCH/.init
+}
+
+
+#
+# Passwords/Secrets handling
+#
+load_secrets_file(){
+    if [ "x$WMAGENT_SECRETS_LOCATION" == "x" ]; then
+        WMAGENT_SECRETS_LOCATION=$HOME/WMAgent.secrets;
+    fi
+    if [ ! -e $WMAGENT_SECRETS_LOCATION ]; then
+        echo "Password file: $WMAGENT_SECRETS_LOCATION does not exist"
+        echo "Either set WMAGENT_SECRETS_LOCATION to a valid file or check that $HOME/WMAgent.secrets exists"
+        exit 1;
+    fi
+
+    local MATCH_ORACLE_USER=`cat $WMAGENT_SECRETS_LOCATION | grep ORACLE_USER | sed s/ORACLE_USER=//`
+    local MATCH_ORACLE_PASS=`cat $WMAGENT_SECRETS_LOCATION | grep ORACLE_PASS | sed s/ORACLE_PASS=//`
+    local MATCH_ORACLE_TNS=`cat $WMAGENT_SECRETS_LOCATION | grep ORACLE_TNS | sed s/ORACLE_TNS=//`
+    local MATCH_COUCH_USER=`cat $WMAGENT_SECRETS_LOCATION | grep COUCH_USER | sed s/COUCH_USER=//`
+    local MATCH_COUCH_PASS=`cat $WMAGENT_SECRETS_LOCATION | grep COUCH_PASS | sed s/COUCH_PASS=//`
+    local MATCH_COUCH_CERT_FILE=`cat $WMAGENT_SECRETS_LOCATION | grep COUCH_CERT_FILE | sed s/COUCH_CERT_FILE=//`
+    local MATCH_COUCH_KEY_FILE=`cat $WMAGENT_SECRETS_LOCATION | grep COUCH_KEY_FILE | sed s/COUCH_KEY_FILE=//`
+    local MATCH_GLOBAL_WORKQUEUE_URL=`cat $WMAGENT_SECRETS_LOCATION | grep GLOBAL_WORKQUEUE_URL | sed s/GLOBAL_WORKQUEUE_URL=//`
+    local MATCH_LOCAL_WORKQUEUE_DBNAME=`cat $WMAGENT_SECRETS_LOCATION | grep LOCAL_WORKQUEUE_DBNAME | sed s/LOCAL_WORKQUEUE_DBNAME=//`
+    local MATCH_WMBS_SERVICE_PORT=`cat $WMAGENT_SECRETS_LOCATION | grep WMBS_SERVICE_PORT | sed s/WMBS_SERVICE_PORT=//`
+    local MATCH_WORKLOAD_SUMMARY_URL=`cat $WMAGENT_SECRETS_LOCATION | grep WORKLOAD_SUMMARY_URL | sed s/WORKLOAD_SUMMARY_URL=//`
+
+    local MATCH_WMSTATS_URL=`cat $WMAGENT_SECRETS_LOCATION | grep WMSTATS_URL | sed s/WMSTATS_URL=//`
+    local MATCH_DBS3_URL=`cat $WMAGENT_SECRETS_LOCATION | grep DBS3_URL | sed s/DBS3_URL=//`
+    local MATCH_PHEDEX_URL=`cat $WMAGENT_SECRETS_LOCATION | grep PHEDEX_URL | sed s/PHEDEX_URL=//`
+    local MATCH_DQM_URL=`cat $WMAGENT_SECRETS_LOCATION | grep DQM_URL | sed s/DQM_URL=//`
+    local MATCH_DASHBOARD_URL=`cat $WMAGENT_SECRETS_LOCATION | grep DASHBOARD_URL | sed s/DASHBOARD_URL=//`
+    local MATCH_REQUESTCOUCH_URL=`cat $WMAGENT_SECRETS_LOCATION | grep REQUESTCOUCH_URL | sed s/REQUESTCOUCH_URL=//`
+    local MATCH_CENTRAL_LOGDB_URL=`cat $WMAGENT_SECRETS_LOCATION | grep CENTRAL_LOGDB_URL | sed s/CENTRAL_LOGDB_URL=//`
+
+    local MATCH_CONFDB_URL=`cat $WMAGENT_SECRETS_LOCATION | grep CONFDB_URL | sed s/CONFDB_URL=//`
+    local MATCH_SMDB_URL=`cat $WMAGENT_SECRETS_LOCATION | grep SMDB_URL | sed s/SMDB_URL=//`
+    local MATCH_POPCONLOGDB_URL=`cat $WMAGENT_SECRETS_LOCATION | grep POPCONLOGDB_URL | sed s/POPCONLOGDB_URL=//`
+    local MATCH_T0DATASVCDB_URL=`cat $WMAGENT_SECRETS_LOCATION | grep T0DATASVCDB_URL | sed s/T0DATASVCDB_URL=//`
+    
+    # oracle settings
+    ORACLE_USER=$MATCH_ORACLE_USER;
+    ORACLE_PASS=$MATCH_ORACLE_PASS;
+    ORACLE_TNS=$MATCH_ORACLE_TNS;
+    if [ "x$ORACLE_USER" == "x" ] || [ "x$ORACLE_PASS" == "x" ] || [ "x$ORACLE_TNS" == "x" ]; then
+	echo "Secrets file doesn't contain ORACLE_USER, ORACLE_PASS or ORACLE_TNS";
+	exit 1
+    fi
+
+    # basic couch settings
+    COUCH_USER=${MATCH_COUCH_USER:-wmagentcouch};
+    COUCH_PASS=${MATCH_COUCH_PASS:-$COUCH_PASS};
+    if [ "x$COUCH_PASS" == "x" ]; then
+        echo "Secrets file doesnt contain COUCH_PASS";
+        exit 1
+    fi
+
+    # if couch ssl certificate not specified check X509_USER_CERT and X509_USER_PROXY
+    COUCH_CERT_FILE=${MATCH_COUCH_CERT_FILE:-${X509_USER_CERT:-$X509_USER_PROXY}};
+
+    # if couch ssl key not specified check X509_USER_KEY and X509_USER_PROXY
+    COUCH_KEY_FILE=${MATCH_COUCH_KEY_FILE:-${X509_USER_KEY:-$X509_USER_PROXY}};
+
+    LOCAL_WORKQUEUE_DBNAME=${MATCH_LOCAL_WORKQUEUE_DBNAME:-$LOCAL_WORKQUEUE_DBNAME};
+
+    WMBS_SERVICE_PORT=${MATCH_WMBS_SERVICE_PORT:-$WMBS_SERVICE_PORT};
+
+    WORKLOAD_SUMMARY_URL=$MATCH_WORKLOAD_SUMMARY_URL;
+    if [ "x$WORKLOAD_SUMMARY_URL" == "x" ]; then
+        echo "Secrets file doesn't contain WORKLOAD_SUMMARY_URL";
+        exit 1
+    fi
+
+    WMSTATS_URL=${MATCH_WMSTATS_URL:-$WMSTATS_URL}
+
+    DBS3_URL=${MATCH_DBS3_URL:-$DBS3_URL}
+
+    PHEDEX_URL=${MATCH_PHEDEX_URL:-$PHEDEX_URL}
+
+    DQM_URL=${MATCH_DQM_URL:-$DQM_URL}
+
+    DASHBOARD_URL=${MATCH_DASHBOARD_URL:-$DASHBOARD_URL}
+    
+    REQUESTCOUCH_URL=${MATCH_REQUESTCOUCH_URL:-$REQUESTCOUCH_URL}
+    
+    CENTRAL_LOGDB_URL=${MATCH_CENTRAL_LOGDB_URL:-$CENTRAL_LOGDB_URL}
+
+    # tier0 settings
+    CONFDB_URL=$MATCH_CONFDB_URL;
+    SMDB_URL=$MATCH_SMDB_URL;
+    POPCONLOGDB_URL=$MATCH_POPCONLOGDB_URL;
+    T0DATASVCDB_URL=$MATCH_T0DATASVCDB_URL;
+}
+
+print_settings(){
+    echo "INSTALL_TIER0=             $INSTALL_TIER0             "
+    echo "CONFIG_TIER0=              $CONFIG_TIER0              "
+    echo "CONFIG_COUCH=              $CONFIG_COUCH              "
+    echo "ORACLE_USER=               $ORACLE_USER               "
+    echo "ORACLE_PASS=               $ORACLE_PASS               "
+    echo "ORACLE_TNS=                $ORACLE_TNS                "
+    echo "COUCH_USER=                $COUCH_USER                "
+    echo "COUCH_PASS=                $COUCH_PASS                "
+    echo "COUCH_CERT_FILE=           $COUCH_CERT_FILE           "
+    echo "COUCH_KEY_FILE=            $COUCH_KEY_FILE            "
+    echo "GLOBAL_WORKQUEUE_URL=      $GLOBAL_WORKQUEUE_URL      "
+    echo "LOCAL_WORKQUEUE_DBNAME=    $LOCAL_WORKQUEUE_DBNAME    "
+    echo "WMBS_SERVICE_PORT=         $WMBS_SERVICE_PORT         "
+    echo "WORKLOAD_SUMMARY_URL=      $WORKLOAD_SUMMARY_URL      "
+    echo "WMSTATS_URL=               $WMSTATS_URL               "
+    echo "DBS3_URL=                  $DBS3_URL                  "
+    echo "PHEDEX_URL=                $PHEDEX_URL                "
+    echo "DQM_URL=                   $DQM_URL                   "
+    echo "DASHBOARD_URL=             $DASHBOARD_URL             "
+    echo "REQUESTCOUCH_URL=          $REQUESTCOUCH_URL          "
+    echo "CENTRAL_LOGDB_URL=         $CENTRAL_LOGDB_URL         "
+    echo "CONFDB_URL=                $CONFDB_URL                "
+    echo "SMDB_URL=                  $SMDB_URL                  "
+    echo "POPCONLOGDB_URL=           $POPCONLOGDB_URL           "
+    echo "T0DATASVCDB_URL=           $T0DATASVCDB_URL           "
+}
+
+
+#
+# Environment
+#
+. $ROOT_DIR/apps/t0/etc/profile.d/init.sh
+
+export T0_ROOT
+export WMAGENT_ROOT
+# WMAGENT_ROOT == WMCORE_ROOT now but in old rpms WMCORE_ROOT was seperate,
+# if WMCORE_ROOT already set export it, else set to WMAGENT_ROOT
+export WMCORE_ROOT=${WMCORE_ROOT:-$WMAGENT_ROOT}
+export YUI_ROOT
+
+#
+# Database prompt so that people can poke around in the db interactively
+#
+db_prompt(){
+    load_secrets_file;
+    sqlplus $ORACLE_USER/$ORACLE_PASS@$ORACLE_TNS
+}
+
+#########################
+#  CouchDB              #
+#########################
+
+#
+# first time startup for couch: disable admin party and create user based on secrets file
+#
+init_couch_pre(){
+    echo "Initialising CouchDB on $COUCH_HOST:$COUCH_PORT..."
+    mkdir -p $INSTALL_COUCH/logs
+    mkdir -p $INSTALL_COUCH/database
+    perl -p -i -e "s{deploy_project_root/couchdb}{$INSTALL_COUCH}" $CONFIG_COUCH/local.ini
+    # couch ini file requires IP based hostname
+    perl -p -i -e "s{bind_address = 0.0.0.0}{bind_address = $COUCH_HOST}g" $CONFIG_COUCH/local.ini
+    perl -p -i -e "s{port = 5984}{port = $COUCH_PORT}g" $CONFIG_COUCH/local.ini
+    perl -p -i -e "s{;admin = mysecretpassword}{$COUCH_USER = $COUCH_PASS}g" $CONFIG_COUCH/local.ini
+    if [ "x$COUCH_CERT_FILE" != "x" ] && [ "x$COUCH_KEY_FILE" != "x" ]; then
+	mkdir -p $INSTALL_COUCH/certs
+	perl -p -i -e "s{;cert_file =.*}{cert_file = $INSTALL_COUCH/certs/cert.pem}g" $CONFIG_COUCH/local.ini
+	perl -p -i -e "s{;key_file =.*}{key_file = $INSTALL_COUCH/certs/key.pem}g" $CONFIG_COUCH/local.ini
+	perl -p -i -e "s{;cacert_file =.*}{cacert_file = $INSTALL_COUCH/certs/cert.pem}g" $CONFIG_COUCH/local.ini
+	ln -s $COUCH_CERT_FILE $INSTALL_COUCH/certs/cert.pem
+	ln -s $COUCH_KEY_FILE $INSTALL_COUCH/certs/key.pem
+    fi
+}
+
+init_couch_post(){
+    inited_couch;
+}
+
+status_of_couch(){
+    echo "+ Couch Status:"
+    if [ ! -e $INSTALL_COUCH/logs/couchdb.pid ]; then
+        echo "++ Couch process file not found"
+        return
+    fi
+    local COUCH_PID=`cat $INSTALL_COUCH/logs/couchdb.pid`
+    kill -0 $COUCH_PID;
+    local COUCH_STATUS=$?
+    if [ $COUCH_STATUS -eq 0 ]; then
+        echo "++ Couch running with process: $COUCH_PID";
+    else
+        echo "++ Couch process not running"
+    fi
+    echo "++" `curl -s $COUCH_HOST:$COUCH_PORT`
+}
+
+#
+# Startup couch
+#
+start_couch(){
+    load_secrets_file;
+    echo "starting couch..."
+    if [ $COUCH_INIT_DONE -eq 0 ]; then
+	echo "CouchDB has not been initialised... running pre initialisation";
+	init_couch_pre;
+    fi
+    couchdb -b -a $CONFIG_COUCH/local.ini \
+            -p $INSTALL_COUCH/logs/couchdb.pid \
+            -e $INSTALL_COUCH/logs/stderr.log \
+            -o $INSTALL_COUCH/logs/stdout.log
+    if [ $COUCH_INIT_DONE -eq 0 ]; then
+	echo "CouchDB has not been initialised... running post initialisation"
+	init_couch_post;
+    fi
+}
+
+#
+# shutdown couch
+#
+stop_couch(){
+    echo "stopping couch...";
+    couchdb  -d  -p $INSTALL_COUCH/logs/couchdb.pid;
+}
+
+clean_couch(){
+    echo "cleaning couch installation..."
+    stop_couch
+    echo "removing files"
+    rm -f $INSTALL_COUCH/.init
+    rm -rf $INSTALL_COUCH/database/*
+}
+
+
+#
+# combined startup of all required services
+#
+start_services(){
+    #start up the services required by the tier0
+    echo "Starting Services..."
+    start_couch;
+}
+
+stop_services(){
+    #shut down all services
+    echo "Shutting down services..."
+    stop_couch;
+}
+
+##############################
+#  Tier0 stuff               #
+##############################
+
+
+# generate the tier0 config from the basic template
+initialize_tier0(){
+    load_secrets_file;
+    wmagent-mod-config --input=$CONFIG_TIER0/config-template.py \
+                       --output=$CONFIG_TIER0/config-agent.py \
+                       --coredb_url=oracle://$ORACLE_USER:$ORACLE_PASS@$ORACLE_TNS \
+                       --working_dir=$INSTALL_TIER0 \
+                       --couch_url=http://$COUCH_USER:$COUCH_PASS@$COUCH_HOST_NAME:$COUCH_PORT \
+                       --workqueue_db_name=$LOCAL_WORKQUEUE_DBNAME \
+                       --wmbs_service_port=$WMBS_SERVICE_PORT \
+                       --workload_summary_url=$WORKLOAD_SUMMARY_URL \
+                       --wmstats_url=$WMSTATS_URL \
+                       --dbs3_url=$DBS3_URL \
+                       --phedex_url=$PHEDEX_URL \
+                       --dqm_url=$DQM_URL \
+                       --dashboard_url=$DASHBOARD_URL \
+                       --requestcouch_url=$REQUESTCOUCH_URL \
+                       --central_logdb_url=$CENTRAL_LOGDB_URL
+                       
+    #-global_workqueue_url=$GLOBAL_WORKQUEUE_URL \
+    optargs=""
+    if [ "x$CONFDB_URL" != "x" ]; then
+	optargs="$optargs --confdb_url=$CONFDB_URL"
+    fi
+    if [ "x$SMDB_URL" != "x" ]; then
+	optargs="$optargs --smdb_url=$SMDB_URL"
+    fi
+    if [ "x$POPCONLOGDB_URL" != "x" ]; then
+	optargs="$optargs --popconlogdb_url=$POPCONLOGDB_URL"
+    fi
+    if [ "x$T0DATASVCDB_URL" != "x" ]; then
+	optargs="$optargs --t0datasvcdb_url=$T0DATASVCDB_URL"
+    fi
+    tier0-mod-config --input=$CONFIG_TIER0/config-agent.py \
+	             --output=$CONFIG_TIER0/config.py \
+                     $optargs
+    wmcore-db-init --config $CONFIG_TIER0/config.py --create --modules=WMCore.WMBS,WMCore.Agent.Database,WMComponent.DBS3Buffer,WMCore.BossAir,WMCore.ResourceControl,T0.WMBS;
+    export WMAGENT_CONFIG=$CONFIG_TIER0/config.py
+    wmagent-couchapp-init;
+    unset WMAGENT_CONFIG
+    inited_tier0;
+}
+
+
+#
+# initialise the tier0 based on the project installed
+#
+init_tier0(){
+    if [ $USING_TIER0 -eq 1 ]; then
+        if [ $TIER0_INIT_DONE -eq 0 ]; then
+            echo "Initialising Tier0..."
+	    initialize_tier0;
+        fi
+    fi
+}
+
+start_tier0(){
+    init_tier0;
+    if [ $USING_TIER0 -eq 1 ]; then
+        echo "Starting Tier0..."
+	wmcoreD --start --config=$CONFIG_TIER0/config.py
+    fi
+}
+
+stop_tier0(){
+    if [ $USING_TIER0 -eq 1 ]; then
+        echo "Shutting down Tier0...";
+        wmcoreD --shutdown --config=$CONFIG_TIER0/config.py
+    fi
+}
+
+status_of_tier0(){
+    if [ $USING_TIER0 -eq 1 ]; then
+        echo "Status of Tier0:"
+        wmcoreD --status --config=$CONFIG_TIER0/config.py
+    fi
+}
+
+
+#
+# revert agent back to pre initialised state & wipe out
+# everything currently in existence.
+clean_tier0(){
+    load_secrets_file;
+    stop_tier0;
+    # Todo: clean couchapps?
+    if [ $USING_TIER0 -eq 1 ]; then
+        echo "Cleaning Tier0..."
+        rm -rf $INSTALL_TIER0/*
+        rm -f $CONFIG_TIER0/config.py
+        rm -f $INSTALL_TIER0/.init
+    fi
+}
+
+status(){
+    load_secrets_file;
+    status_of_couch;
+    status_of_tier0;
+}
+
+clean_all(){
+    load_secrets_file;
+    clean_couch;
+    clean_tier0;
+}
+
+
+execute_command_agent(){
+    shift;
+    local RUNTHIS=$1
+    local WMCORE_BIN_DIR=$WMCORE_ROOT/bin
+    if [ ! -e $WMCORE_BIN_DIR/$1 ]; then
+        echo "$RUNTHIS is not a binary in WMCore/bin"
+        exit 1
+    fi
+    shift;
+    load_secrets_file;
+    export WMAGENT_CONFIG=$CONFIG_TIER0/config.py
+    echo "Executing $RUNTHIS $@ ..."
+    $RUNTHIS $@;
+}
+
+execute_command_tier0(){
+    shift;
+    local RUNTHIS=$1
+    local T0_BIN_DIR=$T0_ROOT/bin
+    if [ ! -e $T0_BIN_DIR/$1 ]; then
+        echo "$RUNTHIS is not a binary in T0/bin"
+        exit 1
+    fi
+    shift;
+    load_secrets_file;
+    export WMAGENT_CONFIG=$CONFIG_TIER0/config.py
+    echo "Executing $RUNTHIS $@ ..."
+    $RUNTHIS $@;
+}
+
+help(){
+    echo "Documentation for this script can be found at: https://svnweb.cern.ch/trac/CMSDMWM/wiki/WMAgentManagement";
+}
+
+
+
+#######################################################
+# Main
+#######################################################
+
+case $1 in
+  status)
+    status ;;
+  activate-tier0)
+    activate_tier0;;
+  start-services)
+    start_services;;
+  stop-services)
+    stop_services;;
+  db-prompt)
+     db_prompt $@;;
+  start-couch)
+     start_couch;;
+  stop-couch)
+     stop_couch;;
+  clean-couch)
+     clean_couch;;
+  init-tier0)
+     init_tier0;;
+  start-tier0)
+     start_tier0;;
+  stop-tier0)
+     stop_tier0;;
+  clean-tier0)
+     clean_tier0;;
+  clean-all)
+     clean_all;;
+  execute-agent)
+     execute_command_agent $@;;
+  execute-tier0)
+     execute_command_tier0 $@;;
+  help)
+    help ;;
+  version)
+    echo "Management script for Tier0" ;;
+  * )
+    echo "$0: unknown action '$1', please try '$0 help' or documentation." 1>&2
+    exit 1 ;;
+esac

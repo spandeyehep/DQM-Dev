@@ -1,0 +1,94 @@
+#!/bin/bash
+
+### It fetches pullRequests made against a given <repository>.
+### For cmsdist repo (cms-sw user), it only fecthes those against "comp" branch.
+### For deployment repo (dmwm user), it's going to fetch everything.
+### It creates a new stg patch for every pull request.
+###
+### Usage: GetPulls -h
+### Usage: GetPulls -r <repository> <list of pull request numbers separated by space>
+### Usage: Example: GetPulls -r cmsdist 263 266 267
+
+usage()
+{
+  perl -ne '/^### Usage:/ && do { s/^### ?//; print }' < $0
+  exit 1
+}
+
+help()
+{
+  perl -ne '/^###/ && do { s/^### ?//; print }' < $0
+  exit 0
+}
+
+for arg; do
+  case $arg in
+    -h) help ;;
+    -r) REPO=$2; shift; shift ;;
+    -*) usage ;;
+  esac
+done
+
+cmsdist()
+{
+  URL="https://github.com/${USER}/${REPO}/pull"
+  API="https://api.github.com/repos/${USER}/${REPO}/pulls"
+  stg init
+
+  for PULL in $PULLS; do
+    echo "Pull: $URL/$PULL"
+    authdate=`curl -L -ks ${URL}/${PULL}.patch | head -n4 | egrep -o 'Date:.*' | cut -d: -f 2- | sed 's/^ *//g'` 
+    author=`curl -L -ks ${URL}/${PULL}.patch | head -n4 | egrep -o 'From:.*' | cut -d: -f 2-| sed 's/^ *//g'` 
+    title=`curl -s ${API}/${PULL} | grep \"title\": | cut -d\" -f4 | sed 's/\(^.\)/\u\1/g'`
+    echo "Summary: authdate=$authdate, author=$author, title=$title"
+  
+    stg new -m "${title%\.}. Close #$PULL." pullreq-$PULL --author "$author" --authdate "$authdate" 
+    curl -L -ks ${URL}/${PULL}.diff | git apply
+    # When there are new files, we need to add them
+    git add -A
+    stg refresh
+
+    echo ""
+    sleep 1
+  done
+}
+
+deployment()
+{
+  URL="https://github.com/${USER}/${REPO}/pull"
+  API="https://api.github.com/repos/${USER}/${REPO}/pulls"
+  stg init
+
+  for PULL in $PULLS; do
+    echo "Pull: $URL/$PULL"
+
+    authdate=`curl -L -ks ${URL}/${PULL}.patch | head -n4 | egrep -o 'Date:.*' | cut -d: -f 2- | sed 's/^ *//g'`
+    author=`curl -L -ks ${URL}/${PULL}.patch | head -n4 | egrep -o 'From:.*' | cut -d: -f 2- | sed 's/^ *//g'`
+    title=`curl -s ${API}/${PULL} | grep \"title\": | cut -d\" -f4 | sed 's/\(^.\)/\u\1/g'`
+    echo "Summary: authdate=$authdate, author=$author, title=$title"
+
+    stg new -m "${title%\.}. Close #$PULL." pullreq-$PULL --author "$author" --authdate "$authdate"
+    curl -L -ks ${URL}/${PULL}.diff | git apply
+    # When there are new files, we need to add them
+    git add -A
+    stg refresh
+
+    echo ""
+    sleep 1
+  done
+}
+
+PULLS=$@
+
+if [ "$REPO" == "cmsdist" ]; then
+  USER="cms-sw"
+  cmsdist
+elif [ "$REPO" == "deployment" ]; then
+  USER="dmwm"
+  deployment
+else
+  echo "$REPO I do *not* know this repository. Quitting ..."
+  exit 2
+fi
+
+exit 0

@@ -1,0 +1,76 @@
+# vim: set ft=sh sw=2 ts=8 et :
+deploy_workqueue_variants="default prod preprod dev"
+
+deploy_workqueue_deps()
+{
+  deploy $stage couchdb
+}
+
+deploy_workqueue_prep()
+{
+  mkproj cache
+}
+
+deploy_workqueue_sw()
+{
+  deploy_pkg \
+    -a dmwm-service-cert.pem:wmcore/dmwm-service-cert.pem \
+    -a dmwm-service-key.pem:wmcore/dmwm-service-key.pem \
+    comp cms+workqueue
+
+  if grep -rq "replace me" $project_auth; then
+    note "WARNING: replace certificates in $project_auth with real ones"
+  else :; fi
+
+  cp -p $root/$cfgversion/config/$project/{GlobalWorkQueueConfig-${variant}.py,GlobalWorkQueueConfig.py}
+}
+
+deploy_workqueue_post()
+{
+  # Do cache cleanup
+  local cmd="rm -rf $root/state/workqueue/cache/*"
+  $nogroups || cmd="sudo -H -u _workqueue bashs -l -c \"${cmd}\""
+  eval $cmd
+
+  # Tell couch to push workqueue apps on the next restart
+  for couch in couchdb:5984; do
+    echo "$project_config/workqueue_task pushcouchapp http://localhost:${couch##*:}" \
+      > $root/state/${couch%%:*}/stagingarea/workqueue
+  done
+
+  # Setup workqueue cronjobs
+  local manage=$project_config/workqueue_task
+
+  local cmd="$manage reqmgr_sync"
+  $nogroups || cmd="sudo -H -u _workqueue bashs -l -c \"${cmd}\""
+  local req_sync="5-45/20 * * * * $cmd"
+
+  local cmd="$manage location_refresh"
+  $nogroups || cmd="sudo -H -u _workqueue bashs -l -c \"${cmd}\""
+  local locations="30 * * * * $cmd"
+
+  local cmd="$manage housekeep"
+  $nogroups || cmd="sudo -H -u _workqueue bashs -l -c \"${cmd}\""
+  local housekeep="15-55/20 * * * * $cmd"
+
+  (mkcrontab;
+   case $variant:$host in
+     prod:vocms0140 | preprod:vocms0131 | dev:vocms0127 | dev:vocms0126 | default:* )
+       echo "${req_sync}"
+       echo "${locations}"
+       echo "${housekeep}"
+       ;;
+     * )
+       ;;
+   esac) | crontab -
+}
+
+deploy_workqueue_auth()
+{
+  case $1 in
+    */*-cert.pem )
+      echo "replace me with your dmwm service certificate" ;;
+    */*-key.pem )
+      echo "replace me with your dmwm service key" ;;
+  esac
+}
