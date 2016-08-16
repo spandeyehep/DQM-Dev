@@ -1,7 +1,7 @@
 /*
  *	file:			        HcalrelvalObjectCustomizer.h
  *	original author:		Viktor Khristenko
- *	modified by:			Shubham Pandey (shubham.pandey@cern.ch)
+ *	modified by:			Shubham Pandey
  *	Revision
  *	Description:	A wrapper around any Render Plugin.
  *		Created specifically for HcalRenderPlugin and 

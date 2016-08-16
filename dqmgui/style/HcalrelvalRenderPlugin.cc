@@ -1,7 +1,7 @@
 /*
  *	file:			            HcalrelvalRenderPlugin.cc
  *	Original author:		    Viktor Khristenko
- *	Modified by:			    Shubham Pandey (shubham.pandey@cern.ch)
+ *	Modified by:			    Shubham Pandey
  */
 
 //	DQM includes

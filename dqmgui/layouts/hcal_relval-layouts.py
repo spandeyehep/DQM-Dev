@@ -1,10 +1,3 @@
-
-###########################################################################
-#              File     :    hcal_relval-layouts.py                       #
-#              Purpose  :    Creates Hcal Layouts for data DQMs           #
-#              Author   :    Shubham Pandey (shubham.pandey@cern.ch)      #
-###########################################################################              
-
 def hcalrechitDlayout(i, p, *rows): i[p] = DQMItem(layout=rows)
 
 hcalrechitDlayout(dqmitems, 'DataLayouts/Hcal/RecHits/00 HE depth 3: occupancy vs ieta',[{'path' : 'HcalRecHitsD/HcalRecHitTask/occupancy_vs_ieta_HE3', 'draw' : { 'xmin' : '0.0', 'xmax' : '-1.0'}}])
