@@ -199,7 +199,7 @@ namespace hcaldqm
       //std::string nana = o.object->GetName();
       std::cout<<"Oscar Mike:";//<<nana<<std::endl;
       bar values = driver(o.object->GetName());
-
+      std::cout<<"xmin: "<<values.xmin<<", xmax: "<<values.xmax<<" , ymin: "<<values.ymin<<" , ymax : "<<values.ymax<<" , rebin : "<<values.rebin<<" ,log_flag: "<<values.log_flag<<"\n";
       //spandey: Rebinning HcalRecHitsD/HcalRecHitTask/N_HB
       
       if (values.xmax > 0 || values.xmin != 0)
@@ -210,7 +210,15 @@ namespace hcaldqm
       if (values.ymax > 0) ((TH1F*)o.object)->SetMaximum(values.ymax);
       if (values.log_flag)  c->GetPad(0)->SetLogy();
 
-
+      std::cout<<"Oscar Mike:Done!!\n";
+      /*      if(strcmp(o.object->GetName(), "N_HB") == 0)
+	{
+	  std::cout<<"Found it !!!!"<<std::endl;
+	  ((TH1F*)o.object)->Rebin(2);
+	  ((TH1F*)o.object)->GetXaxis()->SetRangeUser(0,1000);
+	  	    
+	}
+      */
 
       if ((type == kTH1F) || (type == kTH1D)) {
 	((TH1F*)o.object)->SetLineColor(kBlack);
@@ -235,7 +243,7 @@ namespace hcaldqm
       if (type==kTProfile)
 	{
 
-
+	  std::cout<<"YOLO,"<<o.object->GetName()<<std::endl;
 
 	  TProfile *obj = dynamic_cast<TProfile*>(o.object);
 	  bool foundfirst = false;
@@ -495,7 +503,7 @@ namespace hcaldqm
       if (line)
 	free(line);
   
-
+      std::cout<<"last Sample Loaded:"<<sample<<std::endl;
       return range_code;
       //exit(EXIT_SUCCESS);
     }
@@ -508,7 +516,7 @@ namespace hcaldqm
       std::vector<std::string> f_name;
       std::vector<logs> weblogs;
       char year[5], month[3], day[3];
-      char directory[] = "/tmp/spandey/testGui/logs/dqmgui/relval/";
+      char directory[] = "/tmp/spandey/testGui/logs/dqmgui/relval/";//"/home/shubham/work/learning/C/read_dir/relval/";                                                                                                  
       /* Get all the files and directories within directory */
       if ((dir = opendir (directory)) != NULL) {
 	while ((ent = readdir (dir)) != NULL) {
@@ -545,7 +553,7 @@ namespace hcaldqm
 	printf("\n work directory Not found");
 
       logs recent = this->sorts(weblogs);
-
+      std::cout<<"name:"<<recent.name<<", size: "<<(int)recent.name.size()<<std::endl;
 
       char file_name[100];
       int i1 = 0;
@@ -557,9 +565,11 @@ namespace hcaldqm
       char strtmp[100] = "";
       strcat(strtmp,directory);
 
-      char* full_path = strcat(strtmp,file_name);//strcat(directory, file_name);
+      char* full_path = strcat(strtmp,file_name);//strcat(directory, file_name);                                                                                                                                
+      std::cout<<"full_path: "<<full_path<<std::endl;
+
       int ii = this->get_sample(full_path);
-      
+      std::cout<<"ii:"<<ii<<std::endl;
 
 
       std::vector< std::map<std::string, bar> > vec ;
@@ -567,15 +577,19 @@ namespace hcaldqm
       vec.push_back(foo1());
       vec.push_back(foo2());
       vec.push_back(foo3());
-      
+      std::cout<<"vec Pushed Back; size: "<<vec.size()<<std::endl;
 
       std::map<std::string, bar>::iterator search = vec[ii].find(in);
       bar foobar;
-      if (search != vec[ii].end()) 
+      if (search != vec[ii].end()) {
+    
+	std::cout<<"Key Found!!"<<std::endl<<"Value: "<<search->first<<"\n";
 	foobar = search->second;
-      else 
-	std::cout<<" Not Found!!\n";
-      
+	//std::cout<<"xmin: "<<foobar.xmin<<", xmax: "<<foobar.xmax<<" , ymin: "<<foobar.ymin<<" , ymax : "<<foobar.ymax<<" , rebin : "<<foobar.rebin<<" ,log_flag: "<<foobar.log_flag<<"\n";
+      }
+      else {
+	std::cout<<"Key:"<<in<<" Not Found!!\n";
+      }
 
       return foobar;
     }

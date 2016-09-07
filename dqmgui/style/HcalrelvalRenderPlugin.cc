@@ -8,6 +8,7 @@
 #include "DQM/DQMRenderPlugin.h"
 
 //	User includes
+#include "HcalrelvalRaptor.h"
 #include "HcalrelvalObjectCustomizer.h"
 
 //	ROOT includes
