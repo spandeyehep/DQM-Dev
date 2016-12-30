@@ -1,14 +1,14 @@
 /*
  *	file:			            HcalrelvalRenderPlugin.cc
  *	Original author:		    Viktor Khristenko
- *	Modified by:			    Shubham Pandey
+ *	Modified by:			    Shubham Pandey(shubham.pandey@cern.ch)
  */
 
 //	DQM includes
 #include "DQM/DQMRenderPlugin.h"
 
 //	User includes
-#include "HcalrelvalRaptor.h"
+#include "HcalrelvalMaps.h"
 #include "HcalrelvalObjectCustomizer.h"
 
 //	ROOT includes
@@ -24,7 +24,7 @@ class HcalrelvalRenderPlugin : public DQMRenderPlugin
 public:
   virtual void initialise(int, char** argv)
   {
-    flavour = argv[2];
+    flavour = argv[2]; //Get the flavour of server
     if (flavour.find("/relval/") !=std::string::npos) 
       flavour = "relval";
     else
