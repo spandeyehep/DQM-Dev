@@ -96,11 +96,11 @@ calotowersDlayout(dqmitems, 'DataLayouts/Hcal/CaloTowers/41 Forward CaloTowers S
 calotowersDlayout(dqmitems, 'DataLayouts/Hcal/CaloTowers/42 Barrel CaloTowers SET (GeV)	',[{'path' : 'CaloTowersD/CaloTowersTask/CaloTowersTask_SET_HB'}])
 
 def hcalnoiseratesDlayout(i, p, *rows): i[p] = DQMItem(layout=rows)
-hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/00 RBX energy type 3 (GeV)',[{'path' : 'HcalNoiseRatesD/NoiseRatesTask/hRBXEnergyType3'}])
-hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/01 RBX energy type 2 (GeV)',[{'path' : 'HcalNoiseRatesD/NoiseRatesTask/hRBXEnergyType2'}])
-hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/02 RBX energy type 1 (GeV)',[{'path' : 'HcalNoiseRatesD/NoiseRatesTask/hRBXEnergyType1'}])
-hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/03 RBX number of hits',[{'path' : 'HcalNoiseRatesD/NoiseRatesTask/hRBXNHits'}])
-hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/04 RBX energy (GeV)',[{'path' : 'HcalNoiseRatesD/NoiseRatesTask/hRBXEnergy'}])
+hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/00 RBX energy type 3 (GeV)',[{'path' : 'HcalNoiseRatesD/HcalNoiseRatesTask/hRBXEnergyType3'}])
+hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/01 RBX energy type 2 (GeV)',[{'path' : 'HcalNoiseRatesD/HcalNoiseRatesTask/hRBXEnergyType2'}])
+hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/02 RBX energy type 1 (GeV)',[{'path' : 'HcalNoiseRatesD/HcalNoiseRatesTask/hRBXEnergyType1'}])
+hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/03 RBX number of hits',[{'path' : 'HcalNoiseRatesD/HcalNoiseRatesTask/hRBXNHits'}])
+hcalnoiseratesDlayout(dqmitems, 'DataLayouts/Hcal/RBX/04 RBX energy (GeV)',[{'path' : 'HcalNoiseRatesD/HcalNoiseRatesTask/hRBXEnergy'}])
 
 
 

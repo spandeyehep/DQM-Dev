@@ -1,17 +1,11 @@
 /*
  *	file:			        HcalrelvalObjectCustomizer.h
  *	original author:		Viktor Khristenko
- *	modified by:			Shubham Pandey
- *	Revision
- *	Description:	A wrapper around any Render Plugin.
- *		Created specifically for HcalRenderPlugin and 
- *		HcalCalibRenderPlugin. Provides object customization based on the 
- *		following hierarchical selections. 
- *		1) TObject::Class() -> TH1, TH2, TProfile, etc....
- *		=>	2.1) Based on the Object's name. See naming conventions
- *		=>	2.2) Based on the Bits of TObject using SetBit/TestBit
- *		Naming Conventions(or Name Filters):
+ *	modified by:			Shubham Pandey (shubham.pandey@cern.ch)
  */
+
+#ifndef _HCAL_RELVAL_OBJECTCUSTOMIZER_H
+#define _HCAL_RELVAL_OBJECTCUSTOMIZER_H
 
 //	ROOT Includes
 #include "TCanvas.h"
@@ -105,16 +99,7 @@ namespace hcaldqm
 
 
 
-                                                                                                                                                                                                            
-  struct logs {
-    std::string name;
-    int y;
-    int m;
-    int d;
-  };
-
-
-  
+    
   //	Class HcalrelvalObjectCustomizer
   class HcalrelvalObjectCustomizer
   {
@@ -195,33 +180,43 @@ namespace hcaldqm
       c->GetPad(0)->SetFillColor(kCyan-10);
       c->GetPad(0)->SetGridx();
       c->GetPad(0)->SetGridy();
-      c->Draw();
-      //std::string nana = o.object->GetName();
-      std::cout<<"Oscar Mike:";//<<nana<<std::endl;
-      bar values = driver(o.object->GetName());
 
-      //spandey: Rebinning HcalRecHitsD/HcalRecHitTask/N_HB
+
+      //Get appropriate ranges according to the last loaded sample
+      hist_range values = driver(o.object->GetName());
       
-      if (values.xmax > 0 || values.xmin != 0)
-        ((TH1F*)o.object)->GetXaxis()->SetRangeUser(values.xmin, values.xmax);
+      if(values.rebin != -1) { 
+	if (values.xmax > 0 || values.xmin != 0)  //change xAxis range
+	  ((TH1F*)o.object)->GetXaxis()->SetRangeUser(values.xmin, values.xmax);
+	
+	
+	//yAxis range, log_flag etc                                                                                                                                       
+	if (values.ymin != 0) ((TH1F*)o.object)->SetMinimum(values.ymin);
+	if (values.ymax > 0) ((TH1F*)o.object)->SetMaximum(values.ymax); 
+	if (values.log_flag) {
+	  c->GetPad(0)->SetLogy();
+	  if (values.ymax < 0)
+	    ((TH1F*)o.object)->SetMaximum((((TH1F*)o.object)->GetMaximum())*5);
+	  
+	}
 
-      //yAxis                                                                                                                                                                                             
-      if (values.ymin != 0) ((TH1F*)o.object)->SetMinimum(values.ymin);
-      if (values.ymax > 0) ((TH1F*)o.object)->SetMaximum(values.ymax);
-      if (values.log_flag)  c->GetPad(0)->SetLogy();
-
-
-
-      if ((type == kTH1F) || (type == kTH1D)) {
-	((TH1F*)o.object)->SetLineColor(kBlack);
-	((TH1F*)o.object)->SetLineStyle(2);
-	((TH1F*)o.object)->SetFillColor(42);
-	ri.drawOptions = "hist";
-	c->Modified();
+	//cosmetics      
+	if ((type == kTH1F) || (type == kTH1D)) {
+	  ((TH1F*)o.object)->SetLineStyle(2);
+	  ((TH1F*)o.object)->SetLineWidth(2);
+	  if (values.chi2_flag) {
+	    ((TH1F*)o.object)->SetFillColor(42);
+	    ((TH1F*)o.object)->SetLineColor(kBlack);
+	  }
+	  else
+	    ((TH1F*)o.object)->SetLineColor(kPink);
+	  
+	  ri.drawOptions = "hist";
+	  c->Modified();
+	}
+	
+	
       }
-      
-      
-
       //	by default
       
       
@@ -235,26 +230,9 @@ namespace hcaldqm
       if (type==kTProfile)
 	{
 
-
-
 	  TProfile *obj = dynamic_cast<TProfile*>(o.object);
-	  bool foundfirst = false;
-	  int first = 1;
-	  int last = 1;
-	  for (int i=first; i<=obj->GetNbinsX(); i++)
-	    {
-	      if (!foundfirst && obj->GetBinContent(i)!=0)
-		{
-		  first = i;
-		  foundfirst = true;
-		}
-	      if (obj->GetBinContent(i)!=0)
-		last = i+1;
-	    }
-	  if (last-first>=1)
-	    obj->GetXaxis()->SetRange(first, last);
-	  
-	  
+	  //cosmetics
+
 	  obj->SetErrorOption("");
 	  obj->SetMarkerStyle(20);
 	  obj->SetLineColor(kGreen+2);
@@ -263,9 +241,8 @@ namespace hcaldqm
 	  obj->SetMarkerColor(kGreen+2);
 	  obj->SetMarkerStyle(22);
 	  obj->SetMarkerSize(1.0);
-	  //((TProfile*)o.object)->Draw("hist pl");
 	  ri.drawOptions = "hist pl";
-	  //c->Modified();
+	  c->Modified();
 	}
     }
     
@@ -412,170 +389,32 @@ namespace hcaldqm
 
 
 
+    //This is the driver function
+    // This function returns ranges according to histogram name
+    hist_range driver(std::string hist_name) {
 
-    logs sorts(std::vector<logs> ll) {
+      std::vector< std::map<std::string, hist_range> > vec ;
 
-      //First sort according to yeay/month/date                                                                                                                                                                            
-      for(int i=0; i<(int)ll.size()-1; i++){
-	for(int j=i+1; j<(int)ll.size(); j++){
-	  if( ll[i].y < ll[j].y ) {
-	    swap(ll.at(i),ll.at(j));
-	  }
-	  else if ( ll[i].y == ll[j].y ) {
-	    if( ll[i].m < ll[j].m )
-	      swap(ll.at(i),ll.at(j));
-	    else if ( ll[i].m == ll[j].m ) {
-	      if( ll[i].d < ll[j].d )
-		swap(ll.at(i),ll.at(j));
-	      else
-		continue;
-	    }
-	    else
-	      continue;
-	  }
-	  else
-	    continue;
-	             
-	}
-      }
-
-      return ll.at(0);
-    }
-
-
-
-
-
-    int get_sample(char *f)
-    {
-      FILE * fp;
-      char * line = NULL;
-      size_t len = 0;
-      ssize_t read;
-  
-      std::string sample;
-      int range_code = -1;  //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-  
-      fp = std::fopen(f, "r");
-      if (fp == NULL)
-	exit(EXIT_FAILURE);
-  
-      while ((read = getline(&line, &len, fp)) != -1) {
-	std::string tmp = (std::string)line;
-	if (tmp.find("/dqm/relval/plotfairy/archive/") != std::string::npos) {
-	  if (tmp.find("/RelValTTbar_13/") != std::string::npos) {
-	    sample = "TTbar";
-	    range_code = 2; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-	  else if (tmp.find("/RelValQCD_Pt_80_120_13/") != std::string::npos) {
-	    sample = "LowPtQCD";
-	    range_code = 2; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-	  else if (tmp.find("/RelValQCD_Pt_3000_3500_13/") != std::string::npos) {
-	    sample = "HighPtQCD";
-	    range_code = 3; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-	  else if (tmp.find("/RelValMinBias_13/") != std::string::npos) {
-	    sample = "MinBias";
-	    range_code = 1; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-	  else if (tmp.find("/JetHT/") != std::string::npos) {
-	    sample = "JetHT";
-	    range_code = 0; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-	  else if (tmp.find("/ZeroBias/") != std::string::npos) {
-	    sample = "ZeroBias";
-	    range_code = 0; //rangeMediumData = 0, rangeLow = 1, rangeMedium = 2, rangeHigh = 3
-	  }
-      
-	}
-      }
-  
-      fclose(fp);
-      if (line)
-	free(line);
-  
-
-      return range_code;
-      //exit(EXIT_SUCCESS);
-    }
-
-
-    bar driver(std::string in) {
-      DIR *dir;
-      struct dirent *ent;
-      bool flag = false;
-      std::vector<std::string> f_name;
-      std::vector<logs> weblogs;
-      char year[5], month[3], day[3];
-      char directory[] = "/tmp/spandey/testGui/logs/dqmgui/relval/";
-      /* Get all the files and directories within directory */
-      if ((dir = opendir (directory)) != NULL) {
-	while ((ent = readdir (dir)) != NULL) {
-	  std::string f = (std::string)ent->d_name;
-	  if (f.find("weblog") != std::string::npos) {
-	    for (int i = 7, j = 0; i <= 14; i++, j++) {
-	      if(i <= 10)
-		year[j] = f[i];
-	      if((i == 11) || (i == 12))
-		month[j-4] = f[i];
-	      if( i > 12)
-		day[j-6] = f[i];
-	    }
-	    flag = true;
-	    logs tmp;
-	    tmp.name = f;
-	    tmp.y = atoi(year);
-	    tmp.m = atoi(month);
-	    tmp.d = atoi(day);
-	    weblogs.push_back(tmp);
-	  }
-	}
-
-	closedir (dir);
+      //initializes all maps from HcalrelvalMaps.h file
+      vec.push_back(map0());   
+      vec.push_back(map1());
+      vec.push_back(map2());
+      vec.push_back(map3());
+      int ii = 2;  //Using standard value i.e. rangeMedium
+      std::map<std::string, hist_range>::iterator search = vec[ii].find(hist_name);
+      //hist_range foobar= NULL;
+      hist_range foobar;
+      if (search != vec[ii].end()) {
+		foobar = search->second;
+		//std::cout<<"Key found!!"<<std::endl;	
+		//std::cout<<"hist_name:"<<hist_name<<", xmin:"<<foobar.xmin<<", xmax:"<<foobar.xmax
+		//<<", ymin:"<<foobar.ymin<<", ymax:"<<foobar.ymax<<", log_flag:"<<foobar.log_flag
+		//<<", chi2:"<<foobar.chi2_flag<<", (search->second.chi2_flag):"<<(search->second.chi2_flag)<<std::endl;	
       }
       else {
-	/* could not open directory */
-	perror ("");
-	//return EXIT_FAILURE;
-	exit(EXIT_FAILURE);
-
+	foobar.xmin = -1.0; foobar.xmax =  -1.0; foobar.ymin =-1.0; foobar.ymax = -1.0; foobar.rebin =-1; foobar.log_flag =false; foobar.chi2_flag =false;
+	//std::cout<<"Key:"<<hist_name<<" Not Found!!\n";
       }
-      if(!flag)
-	printf("\n work directory Not found");
-
-      logs recent = this->sorts(weblogs);
-
-
-      char file_name[100];
-      int i1 = 0;
-      for(i1 = 0; i1 < (int)recent.name.size(); i1++) {
-	file_name[i1] = recent.name[i1];
-      }
-      file_name[i1] = '\0';
-
-      char strtmp[100] = "";
-      strcat(strtmp,directory);
-
-      char* full_path = strcat(strtmp,file_name);//strcat(directory, file_name);
-      int ii = this->get_sample(full_path);
-      
-
-
-      std::vector< std::map<std::string, bar> > vec ;
-      vec.push_back(foo0());
-      vec.push_back(foo1());
-      vec.push_back(foo2());
-      vec.push_back(foo3());
-      
-
-      std::map<std::string, bar>::iterator search = vec[ii].find(in);
-      bar foobar;
-      if (search != vec[ii].end()) 
-	foobar = search->second;
-      else 
-	std::cout<<" Not Found!!\n";
-      
 
       return foobar;
     }
@@ -583,6 +422,10 @@ namespace hcaldqm
 
 
 
+    /*
+     *  End of function
+     *
+     */
 
 
 
@@ -609,3 +452,5 @@ namespace hcaldqm
     Double_t _contours_summary[10];
   };
 }
+
+#endif
